@@ -33,7 +33,7 @@ namespace Obi
             m_ConstraintCount = count;
         }
 
-        public override JobHandle Evaluate(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps)
         {
             var projectConstraints = new PinConstraintsBatchJob()
             {
@@ -45,6 +45,7 @@ namespace Obi
                 lambdas = lambdas.Reinterpret<float, float4>(),
 
                 positions = solverImplementation.positions,
+                prevPositions = solverImplementation.prevPositions,
                 invMasses = solverImplementation.invMasses,
                 orientations = solverImplementation.orientations,
                 invRotationalMasses = solverImplementation.invRotationalMasses,
@@ -61,14 +62,16 @@ namespace Obi
                 orientationCounts = solverImplementation.orientationConstraintCounts,
 
                 inertialFrame = ((BurstSolverImpl)constraints.solver).inertialFrame,
-                deltaTime = deltaTime,
+                stepTime = stepTime,
+                substepTime = substepTime,
+                substeps = substeps,
                 activeConstraintCount = m_ConstraintCount
             };
 
             return projectConstraints.Schedule(inputDeps);
         }
 
-        public override JobHandle Apply(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Apply(JobHandle inputDeps, float substepTime)
         {
             var parameters = solverAbstraction.GetConstraintParameters(m_ConstraintType);
 
@@ -103,6 +106,7 @@ namespace Obi
             public NativeArray<float4> lambdas;
 
             [ReadOnly] public NativeArray<float4> positions;
+            [ReadOnly] public NativeArray<float4> prevPositions;
             [ReadOnly] public NativeArray<float> invMasses;
             [ReadOnly] public NativeArray<quaternion> orientations;
             [ReadOnly] public NativeArray<float> invRotationalMasses;
@@ -119,7 +123,9 @@ namespace Obi
             [NativeDisableContainerSafetyRestriction][NativeDisableParallelForRestriction] public NativeArray<int> orientationCounts;
 
             [ReadOnly] public BurstInertialFrame inertialFrame;
-            [ReadOnly] public float deltaTime;
+            [ReadOnly] public float stepTime;
+            [ReadOnly] public float substepTime;
+            [ReadOnly] public int substeps;
             [ReadOnly] public int activeConstraintCount;
 
             public void Execute()
@@ -136,9 +142,10 @@ namespace Obi
                     int rigidbodyIndex = shapes[colliderIndex].rigidbodyIndex;
 
                     // calculate time adjusted compliances
-                    float2 compliances = stiffnesses[i].xy / (deltaTime * deltaTime);
+                    float2 compliances = stiffnesses[i].xy / (substepTime * substepTime);
 
-                    float4 particlePosition = positions[particleIndex];
+                    // project particle position to the end of the full step:
+                    float4 particlePosition = math.lerp(prevPositions[particleIndex], positions[particleIndex], substeps);
 
                     // express pin offset in world space:
                     float4 worldPinOffset = transforms[colliderIndex].TransformPoint(offsets[i]);
@@ -148,20 +155,16 @@ namespace Obi
                     float rigidbodyLinearW = 0;
                     float rigidbodyAngularW = 0;
 
-                    float4 linearRbDelta  = float4.zero;
-                    float4 angularRbDelta = float4.zero;
-
                     if (rigidbodyIndex >= 0)
                     {
                         var rigidbody = rigidbodies[rigidbodyIndex];
-                        linearRbDelta = rigidbodyLinearDeltas[rigidbodyIndex];
-                        angularRbDelta = rigidbodyAngularDeltas[rigidbodyIndex];
 
-                        // predict world-space position of offset point:
-                        predictedPinOffset = BurstIntegration.IntegrateLinear(predictedPinOffset, rigidbody.GetVelocityAtPoint(worldPinOffset, linearRbDelta, angularRbDelta), deltaTime);
+                        // predict offset point position:
+                        float4 velocityAtPoint = BurstMath.GetRigidbodyVelocityAtPoint(rigidbodyIndex, inertialFrame.frame.InverseTransformPoint(worldPinOffset), rigidbodies, rigidbodyLinearDeltas, rigidbodyAngularDeltas, inertialFrame.frame);
+                        predictedPinOffset = BurstIntegration.IntegrateLinear(predictedPinOffset, inertialFrame.frame.TransformVector(velocityAtPoint), stepTime);
 
                         // predict rotation at the end of the step:
-                        predictedRotation = BurstIntegration.IntegrateAngular(predictedRotation, rigidbody.angularVelocity + angularRbDelta, deltaTime);
+                        predictedRotation = BurstIntegration.IntegrateAngular(predictedRotation, rigidbody.angularVelocity + rigidbodyAngularDeltas[rigidbodyIndex], stepTime);
 
                         // calculate linear and angular rigidbody weights:
                         rigidbodyLinearW = rigidbody.inverseMass;
@@ -173,6 +176,7 @@ namespace Obi
 
                     // Transform pin position to solver space for constraint solving:
                     predictedPinOffset = inertialFrame.frame.InverseTransformPoint(predictedPinOffset);
+                    predictedRotation = math.mul(math.conjugate(inertialFrame.frame.rotation), predictedRotation);
 
                     float4 gradient = particlePosition - predictedPinOffset;
                     float constraint = math.length(gradient);
@@ -183,8 +187,16 @@ namespace Obi
                     lambda.w += linearDLambda;
                     float4 correction = linearDLambda * gradientDir;
 
-                    deltas[particleIndex] += correction * invMasses[particleIndex];
+                    deltas[particleIndex] += correction * invMasses[particleIndex] / substeps;
                     counts[particleIndex]++;
+
+                    if (rigidbodyIndex >= 0)
+                    {
+                        BurstMath.ApplyImpulse(rigidbodyIndex,
+                                               -correction / stepTime * 1,
+                                               inertialFrame.frame.InverseTransformPoint(worldPinOffset),
+                                               rigidbodies, rigidbodyLinearDeltas, rigidbodyAngularDeltas, inertialFrame.frame);
+                    }
 
                     if (rigidbodyAngularW > 0 || invRotationalMasses[particleIndex] > 0)
                     {
@@ -204,21 +216,17 @@ namespace Obi
                         quaternion dlambdaQ = new quaternion(dlambda[0], dlambda[1], dlambda[2], 0);
 
                         quaternion orientDelta = orientationDeltas[particleIndex];
-                        orientDelta.value += math.mul(predictedRotation, dlambdaQ).value * invRotationalMasses[particleIndex];
+                        orientDelta.value += math.mul(predictedRotation, dlambdaQ).value * invRotationalMasses[particleIndex] / substeps;
                         orientationDeltas[particleIndex] = orientDelta;
                         orientationCounts[particleIndex]++;
 
                         if (rigidbodyIndex >= 0)
-                            rigidbodies[rigidbodyIndex].ApplyDeltaQuaternion(predictedRotation, math.mul(orientations[particleIndex], dlambdaQ).value * -rigidbodyAngularW, ref angularRbDelta, deltaTime);
-                    }
-
-                    if (rigidbodyIndex >= 0)
-                    {
-                        float4 impulse = correction / deltaTime;
-
-                        rigidbodies[rigidbodyIndex].ApplyImpulse(-inertialFrame.frame.TransformVector(impulse) * 1, worldPinOffset, ref linearRbDelta, ref angularRbDelta);
-                        rigidbodyLinearDeltas[rigidbodyIndex] = linearRbDelta;
-                        rigidbodyAngularDeltas[rigidbodyIndex] = angularRbDelta;
+                        {
+                            BurstMath.ApplyDeltaQuaternion(rigidbodyIndex,
+                                                            predictedRotation,
+                                                            -math.mul(orientations[particleIndex], dlambdaQ).value * rigidbodyAngularW,
+                                                            rigidbodyAngularDeltas, inertialFrame.frame, stepTime);
+                        }
                     }
 
                     lambdas[i] = lambda;

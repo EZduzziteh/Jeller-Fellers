@@ -1,14 +1,12 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
-using UnityEngine;
 using Unity.Burst;
 using Unity.Jobs;
 using Unity.Collections;
-using System.Collections;
 
 namespace Obi
 {
     [BurstCompile]
-    public struct DequeueIntoArrayJob<T> : IJob where T : struct
+    public struct DequeueIntoArrayJob<T> : IJob where T : unmanaged
     {
         public int StartIndex;
         public NativeQueue<T> InputQueue;

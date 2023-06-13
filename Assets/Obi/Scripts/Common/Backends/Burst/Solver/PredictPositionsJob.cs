@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct PredictPositionsJob : IJobParallelFor
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
         [ReadOnly] public NativeArray<int> phases;
         [ReadOnly] public NativeArray<float> buoyancies;
 
@@ -47,7 +47,7 @@ namespace Obi
                 float4 effectiveGravity = gravity;
 
                 // Adjust gravity for buoyant fluid particles:
-                if ((phases[i] & (int)Oni.ParticleFlags.Fluid) != 0)
+                if ((phases[i] & (int)ObiUtils.ParticleFlags.Fluid) != 0)
                     effectiveGravity *= -buoyancies[i];
 
                 // apply external forces and gravity:

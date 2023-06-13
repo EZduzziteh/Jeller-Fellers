@@ -2,31 +2,47 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class DeathBox : MonoBehaviour
+namespace JellerFellers
 {
-    public GameObject empty;
-   
-    // Start is called before the first frame update
-    void Start()
-    {
-        
-    }
 
-    // Update is called once per frame
-    void Update()
+    [ExecuteInEditMode]
+    public class DeathBox : MonoBehaviour
     {
-        
-    }
+        public GameObject empty;
+        [SerializeField]
+        float colliderSize = 100.0f;
+        BoxCollider collider;
 
-    private void OnTriggerEnter(Collider other)
-    {
-        if (other.tag == "Player")
+        bool hasBeenTriggered = false;
+
+        private void Awake()
         {
-            FindObjectOfType<CharacterController>().Die();
-            GameObject temp=Instantiate(empty);
-            empty.transform.position = Camera.main.GetComponent<MouseOrbitImproved>().target.position;
-            Destroy(GetComponent<Collider>());
-            Camera.main.GetComponent<MouseOrbitImproved>().target = temp.transform;
+            collider = GetComponent<BoxCollider>();
         }
+
+        public void HandleDeath()
+        {
+            if (hasBeenTriggered == false)
+            {
+                Debug.Log("handle death");
+                FindObjectOfType<Player_Controller_Obi>().Die();
+                GameObject temp = Instantiate(empty);
+
+                empty.transform.position = FindObjectOfType<Player_Controller_Obi>().transform.position;
+
+                Camera.main.GetComponent<MouseOrbitImproved>().target = temp.transform;
+                hasBeenTriggered = true;
+            }
+        }
+
+
+        /*
+        private void OnTriggerEnter(Collider other)
+        {
+            if (other.tag == "Player")
+            {
+                HandleDeath();
+            }
+        }*/
     }
 }

@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct UpdatePositionsJob : IJobParallelFor
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
 
         // linear/position properties:
         [NativeDisableParallelForRestriction] public NativeArray<float4> positions;

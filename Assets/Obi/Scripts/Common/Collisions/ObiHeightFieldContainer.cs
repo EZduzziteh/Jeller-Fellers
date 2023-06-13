@@ -46,11 +46,13 @@ namespace Obi
                 int height = source.heightmapResolution;
 
                 float[,] heights = source.GetHeights(0, 0, width, height);
+                bool[,] holes = source.GetHoles(0, 0, width-1, height-1);
+
                 float[] buffer = new float[width * height];
 
                 for (int y = 0; y < height; ++y)
                     for (int x = 0; x < width; ++x)
-                        buffer[y * width + x] = heights[y, x];
+                        buffer[y * width + x] = heights[y, x] * (holes[Mathf.Min(y,height - 2), Mathf.Min(x, width - 2)] ? 1:-1);
 
                 handle = new ObiHeightFieldHandle(source, headers.count);
                 handles.Add(source, handle);

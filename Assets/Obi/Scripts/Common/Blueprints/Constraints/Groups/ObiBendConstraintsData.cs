@@ -24,6 +24,18 @@ namespace Obi
             set;
         }
 
+        float plasticYield
+        {
+            get;
+            set;
+        }
+
+        float plasticCreep
+        {
+            get;
+            set;
+        }
+
     }
 
     [Serializable]

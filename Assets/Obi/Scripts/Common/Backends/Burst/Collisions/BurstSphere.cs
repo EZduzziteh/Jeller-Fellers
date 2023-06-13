@@ -1,47 +1,62 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
-using System;
-using System.Collections.Generic;
-using UnityEngine;
 using Unity.Collections;
-using Unity.Jobs;
 using Unity.Mathematics;
-using Unity.Burst;
 
 namespace Obi
 {
-    public static class BurstSphere
+    public struct BurstSphere : BurstLocalOptimization.IDistanceFunction, IBurstCollider
     {
-        public static void Contacts(int particleIndex,
-                                  float4 position,
-                                  quaternion orientation,
-                                  float4 radii,
-                                  int colliderIndex,
-                                  BurstAffineTransform transform,
-                                  BurstColliderShape shape,
-                                  NativeQueue<BurstContact>.ParallelWriter contacts)
+        public BurstColliderShape shape;
+        public BurstAffineTransform colliderToSolver;
+        public float dt;
+
+        public void Evaluate(float4 point, float4 radii, quaternion orientation, ref BurstLocalOptimization.SurfacePoint projectedPoint)
         {
-            float4 center = shape.center * transform.scale;
-            position = transform.InverseTransformPointUnscaled(position) - center;
+            float4 center = shape.center * colliderToSolver.scale;
+            point = colliderToSolver.InverseTransformPointUnscaled(point) - center;
 
-            float radius = shape.size.x * math.cmax(transform.scale.xyz);
-            float distanceToCenter = math.length(position);
+            if (shape.is2D != 0)
+                point[2] = 0;
 
-            float4 normal = position / distanceToCenter;
+            float radius = shape.size.x * math.cmax(colliderToSolver.scale.xyz);
+            float distanceToCenter = math.length(point);
 
-            BurstContact c = new BurstContact
-            {
-                entityA = particleIndex,
-                entityB = colliderIndex,
-                point = center + normal * radius,
-                normal = normal,
-            };
+            float4 normal = point / (distanceToCenter + BurstMath.epsilon);
 
-            c.point = transform.TransformPointUnscaled(c.point);
-            c.normal = transform.TransformDirection(c.normal);
+            projectedPoint.point = colliderToSolver.TransformPointUnscaled(center + normal * (radius + shape.contactOffset));
+            projectedPoint.normal = colliderToSolver.TransformDirection(normal);
+        }
 
-            c.distance = distanceToCenter - radius - (shape.contactOffset + BurstMath.EllipsoidRadius(c.normal, orientation, radii.xyz));
+        public void Contacts(int colliderIndex,
+                             int rigidbodyIndex,
+                             NativeArray<BurstRigidbody> rigidbodies,
 
-            contacts.Enqueue(c);
+                             NativeArray<float4> positions,
+                             NativeArray<quaternion> orientations,
+                             NativeArray<float4> velocities,
+                             NativeArray<float4> radii,
+
+                             NativeArray<int> simplices,
+                             in BurstAabb simplexBounds,
+                             int simplexIndex,
+                             int simplexStart,
+                             int simplexSize,
+
+                             NativeQueue<BurstContact>.ParallelWriter contacts,
+                             int optimizationIterations,
+                             float optimizationTolerance)
+        {
+            var co = new BurstContact() { bodyA = simplexIndex, bodyB = colliderIndex };
+            float4 simplexBary = BurstMath.BarycenterForSimplexOfSize(simplexSize);
+
+            var colliderPoint = BurstLocalOptimization.Optimize<BurstSphere>(ref this, positions, orientations, radii, simplices, simplexStart, simplexSize,
+                                                                             ref simplexBary, out float4 convexPoint, optimizationIterations, optimizationTolerance);
+
+            co.pointB = colliderPoint.point;
+            co.normal = colliderPoint.normal;
+            co.pointA = simplexBary;
+
+            contacts.Enqueue(co);
         }
     }
 

@@ -14,6 +14,7 @@ namespace Obi
         private NativeArray<int> orientationIndices;
         private NativeArray<quaternion> restDarboux;
         private NativeArray<float3> stiffnesses;
+        private NativeArray<float2> plasticity;
 
         public BurstBendTwistConstraintsBatch(BurstBendTwistConstraints constraints)
         {
@@ -21,22 +22,24 @@ namespace Obi
             m_ConstraintType = Oni.ConstraintType.BendTwist;
         }
 
-        public void SetBendTwistConstraints(ObiNativeIntList orientationIndices, ObiNativeQuaternionList restDarboux, ObiNativeVector3List stiffnesses, ObiNativeFloatList lambdas, int count)
+        public void SetBendTwistConstraints(ObiNativeIntList orientationIndices, ObiNativeQuaternionList restDarboux, ObiNativeVector3List stiffnesses, ObiNativeVector2List plasticity, ObiNativeFloatList lambdas, int count)
         {
             this.orientationIndices = orientationIndices.AsNativeArray<int>();
             this.restDarboux = restDarboux.AsNativeArray<quaternion>();
             this.stiffnesses = stiffnesses.AsNativeArray<float3>();
+            this.plasticity = plasticity.AsNativeArray<float2>();
             this.lambdas = lambdas.AsNativeArray<float>();
             m_ConstraintCount = count;
         }
 
-        public override JobHandle Evaluate(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps)
         {
             var projectConstraints = new BendTwistConstraintsBatchJob()
             {
                 orientationIndices = orientationIndices,
                 restDarboux = restDarboux,
                 stiffnesses = stiffnesses,
+                plasticity = plasticity,
                 lambdas = lambdas.Reinterpret<float, float3>(),
 
                 orientations = solverImplementation.orientations,
@@ -45,13 +48,13 @@ namespace Obi
                 orientationDeltas = solverImplementation.orientationDeltas,
                 orientationCounts = solverImplementation.orientationConstraintCounts ,
 
-                deltaTimeSqr = deltaTime * deltaTime
+                deltaTime = substepTime
             };
 
             return projectConstraints.Schedule(m_ConstraintCount, 32, inputDeps);
         }
 
-        public override JobHandle Apply(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Apply(JobHandle inputDeps, float substepTime)
         {
             var parameters = solverAbstraction.GetConstraintParameters(m_ConstraintType);
 
@@ -73,8 +76,9 @@ namespace Obi
         public struct BendTwistConstraintsBatchJob : IJobParallelFor
         {
             [ReadOnly] public NativeArray<int> orientationIndices;
-            [ReadOnly] public NativeArray<quaternion> restDarboux;
             [ReadOnly] public NativeArray<float3> stiffnesses;
+            [ReadOnly] public NativeArray<float2> plasticity;
+            public NativeArray<quaternion> restDarboux;
             public NativeArray<float3> lambdas;
 
             [ReadOnly] public NativeArray<quaternion> orientations;
@@ -83,7 +87,7 @@ namespace Obi
             [NativeDisableContainerSafetyRestriction][NativeDisableParallelForRestriction] public NativeArray<quaternion> orientationDeltas;
             [NativeDisableContainerSafetyRestriction][NativeDisableParallelForRestriction] public NativeArray<int> orientationCounts;
 
-            [ReadOnly] public float deltaTimeSqr;
+            [ReadOnly] public float deltaTime;
 
             public void Execute(int i)
             {
@@ -94,16 +98,25 @@ namespace Obi
                 float w2 = invRotationalMasses[q2];
 
                 // calculate time adjusted compliance
-                float3 compliances = stiffnesses[i] / deltaTimeSqr;
+                float3 compliances = stiffnesses[i] / (deltaTime * deltaTime);
 
-                quaternion omega = math.mul(math.conjugate(orientations[q1]), orientations[q2]);   //darboux vector
+                // rest and current darboux vectors
+                quaternion rest = restDarboux[i];
+                quaternion omega = math.mul(math.conjugate(orientations[q1]), orientations[q2]);
 
                 quaternion omega_plus;
-                omega_plus.value = omega.value + restDarboux[i].value;  //delta Omega with - omega_0
-                omega.value -= restDarboux[i].value;                    //delta Omega with + omega_0
+                omega_plus.value = omega.value + rest.value;  //delta Omega with - omega_0
+                omega.value -= rest.value;                    //delta Omega with + omega_0
 
                 if (math.lengthsq(omega.value) > math.lengthsq(omega_plus.value))
                     omega = omega_plus;
+
+                // plasticity
+                if (math.lengthsq(omega.value) > plasticity[i].x * plasticity[i].x)
+                {
+                    rest.value += omega.value * plasticity[i].y * deltaTime;
+                    restDarboux[i] = rest;
+                }
 
                 float3 dlambda = (omega.value.xyz - compliances * lambdas[i]) / (compliances + new float3(w1 + w2 + BurstMath.epsilon));
 
@@ -114,7 +127,7 @@ namespace Obi
                 quaternion d2 = orientationDeltas[q2];
 
                 d1.value += math.mul(orientations[q2], dlambdaQ).value * w1;
-                d2.value += math.mul(orientations[q1], dlambdaQ).value * -w2;
+                d2.value -= math.mul(orientations[q1], dlambdaQ).value * w2;
 
                 orientationDeltas[q1] = d1;
                 orientationDeltas[q2] = d2;

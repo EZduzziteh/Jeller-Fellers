@@ -1,82 +1,104 @@
-using UnityEngine;
 using System;
-using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace Obi
 {
-    
-    public static class GraphColoring
+    /**
+     * General greedy graph coloring algorithm for constraints. Input:
+     * - List of particle indices used by all constraints.
+     * - List of per-constraint offsets of the first constrained particle in the previous array, with the total amount of particle indices in the last position.
+     * 
+     * The output is a color for each constraint. Constraints of the same color are guaranteed to not share any partices.
+     */
+    public class GraphColoring
     {
-        /**
-         * General greedy graph coloring algorithm for constraints. Input:
-         * - List of particle indices used by all constraints.
-         * - List of per-constraint offsets of the first constrained particle in the previous array, with the total amount of particle indices in the last position.
-         * 
-         * The output is a color for each constraint. Constraints of the same color are guaranteed to not share any partices.
-         * If particle order is important within each constraint, make sure to pass a copy for particleIndices, as the order is altered by this function.
-         */
+        private List<int> m_ParticleIndices;
+        private List<int> m_ConstraintIndices;
+        private List<List<int>> m_ConstraintsPerParticle;
 
-        public static int[] Colorize(int[] particleIndices, int[] constraintIndices)
+        public IReadOnlyList<int> particleIndices => m_ParticleIndices.AsReadOnly();
+        public IReadOnlyList<int> constraintIndices => m_ConstraintIndices.AsReadOnly();
+
+        public GraphColoring(int particleCount = 0)
         {
-            int constrainCount = constraintIndices.Length - 1;
-            if (constrainCount == 0)
-                return new int[0];
+            m_ParticleIndices = new List<int>();
+            m_ConstraintIndices = new List<int>();
+            m_ConstraintsPerParticle = new List<List<int>>(particleCount);
+            for (int i = 0; i < particleCount; ++i)
+                m_ConstraintsPerParticle.Add(new List<int>());
+        }
 
-            int[] colors = new int[constrainCount];
-            bool[] availability = new bool[constrainCount];
+        public void Clear()
+        {
+            m_ParticleIndices.Clear();
+            m_ConstraintIndices.Clear();
+            for (int i = 0; i < m_ConstraintsPerParticle.Count; ++i)
+                m_ConstraintsPerParticle[i].Clear();
+        }
 
-            for (int i = 0; i < constrainCount; ++i)
+        public void AddConstraint(int[] particles)
+        {
+            for (int i = 0; i < particles.Length; ++i)
             {
-                // Sort particle indices for all constraints. This allows for efficient neighbour checks.
-                Array.Sort(particleIndices, constraintIndices[i], constraintIndices[i + 1] - constraintIndices[i]);
-                //particleIndices.Sort(constraintIndices[i], constraintIndices[i+1] - constraintIndices[i], Comparer<int>.Default);
-                colors[i] = -1;
+                while (particles[i] >= m_ConstraintsPerParticle.Count)
+                    m_ConstraintsPerParticle.Add(new List<int>());
+                m_ConstraintsPerParticle[particles[i]].Add(m_ConstraintIndices.Count);
+            }
+
+            m_ConstraintIndices.Add(m_ParticleIndices.Count);
+            m_ParticleIndices.AddRange(particles);
+        }
+
+        public IEnumerator Colorize(string progressDescription, List<int> colors)
+        {
+            m_ConstraintIndices.Add(m_ParticleIndices.Count);
+
+            int constraintCount = Mathf.Max(0, m_ConstraintIndices.Count - 1);
+            colors.Clear();
+
+            if (constraintCount == 0)
+                yield break;
+
+            colors.Capacity = constraintCount;
+            bool[] availability = new bool[constraintCount];
+
+            for (int i = 0; i < constraintCount; ++i)
+            {
+                colors.Add(-1);
                 availability[i] = true;
             }
-                
+
             // For each constraint:
-            for (int i = 0; i < constrainCount; ++i)
+            for (int i = 0; i < constraintCount; ++i)
             {
-                // Iterate over all other constraints:
-                for (int j = 0; j < constrainCount; ++j)
+                // iterate over its particles:
+                for (int j = m_ConstraintIndices[i]; j < m_ConstraintIndices[i + 1]; ++j)
                 {
-                    if (i == j) continue;
-
-                    // Check if the constraints share any particle:
-                    int sizeI = constraintIndices[i + 1] - constraintIndices[i];
-                    int sizeJ = constraintIndices[j + 1] - constraintIndices[j];
-                    int counterI = 0;
-                    int counterJ = 0;
-                    while (counterI < sizeI && counterJ < sizeJ)
+                    // for each particle, get constraints affecting it:
+                    foreach (int k in m_ConstraintsPerParticle[m_ParticleIndices[j]])
                     {
-                        int p1 = particleIndices[constraintIndices[i] + counterI];
-                        int p2 = particleIndices[constraintIndices[j] + counterJ];
+                        // skip ourselves:
+                        if (i == k) continue;
 
-                        if (p1 > p2) counterJ++;
-                        else if (p1 < p2) counterI++;
-                        else
-                        {
-                            // Mark the neighbour color as unavailable:
-                            if (colors[j] >= 0)
-                                availability[colors[j]] = false;
-                            break;
-                        }
+                        // both constraints share a particle so mark the neighbour color as unavailable:
+                        if (colors[k] >= 0)
+                            availability[colors[k]] = false;
                     }
                 }
 
                 // Assign the first available color:
-                for (colors[i] = 0; colors[i] < constrainCount; ++colors[i])
+                for (colors[i] = 0; colors[i] < constraintCount; ++colors[i])
                     if (availability[colors[i]])
                         break;
 
                 // Reset availability flags:
-                for (int j = 0; j < constrainCount; ++j)
+                for (int j = 0; j < constraintCount; ++j)
                     availability[j] = true;
-            }
 
-            return colors;
+                yield return new CoroutineJob.ProgressInfo(progressDescription, i / (float)constraintCount);
+            }
         }
 
 

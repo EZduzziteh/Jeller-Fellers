@@ -50,7 +50,7 @@ namespace Obi
         protected NativeArray<int> particleIndices;
         protected NativeArray<float> lambdas;
 
-        public virtual JobHandle Initialize(JobHandle inputDeps, float deltaTime)
+        public virtual JobHandle Initialize(JobHandle inputDeps, float substepTime)
         {
             if (lambdas.IsCreated)
             {
@@ -65,8 +65,8 @@ namespace Obi
         }
 
         // implemented by concrete constraint subclasses.
-        public abstract JobHandle Evaluate(JobHandle inputDeps, float deltaTime);
-        public abstract JobHandle Apply(JobHandle inputDeps, float deltaTime);
+        public abstract JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps);
+        public abstract JobHandle Apply(JobHandle inputDeps, float substepTime);
 
         public virtual void Destroy()
         {

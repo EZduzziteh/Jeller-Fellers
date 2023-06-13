@@ -79,6 +79,8 @@ namespace Obi
         public event CollisionCallback OnParticleCollision;
         public event SolverCallback OnUpdateParameters;
 
+        public event SolverCallback OnPrepareFrame;
+        public event SolverStepCallback OnPrepareStep;
         public event SolverStepCallback OnBeginStep;
         public event SolverStepCallback OnSubstep;
         public event SolverCallback OnEndStep;
@@ -100,9 +102,11 @@ namespace Obi
 
         [SerializeField] private BackendType m_Backend = BackendType.Burst;
 
-        [ChildrenOnly]
         public Oni.SolverParameters parameters = new Oni.SolverParameters(Oni.SolverParameters.Interpolation.None,
                                                                           new Vector4(0, -9.81f, 0, 0));
+
+        public Vector3 gravity = new Vector3(0, -9.81f, 0);
+        public Space gravitySpace = Space.Self;
 
         [Range(0, 1)]
         public float worldLinearInertiaScale = 0;           /**< how much does world-space linear inertia affect the actor. This only applies when the solver has "simulateInLocalSpace" enabled.*/
@@ -112,15 +116,34 @@ namespace Obi
 
         [HideInInspector] [NonSerialized] public List<ObiActor> actors = new List<ObiActor>();
         [HideInInspector] [NonSerialized] public ParticleInActor[] m_ParticleToActor;
+
         private ObiNativeIntList freeList;
-        private int[] activeParticles;
-        private int activeParticleCount = 0;
-        [HideInInspector] [NonSerialized] public bool dirtyActiveParticles = true;
-        [HideInInspector] [NonSerialized] public int dirtyConstraints = 0;
+
+        private List<int> points = new List<int>();      /**< 0-simplices*/
+        private List<int> edges = new List<int>();      /**< 1-simplices*/
+        private List<int> triangles = new List<int>();      /**< 2-simplices*/
+        private SimplexCounts m_SimplexCounts;
+
+        [HideInInspector][NonSerialized] public bool dirtySimplices = true;
+        [HideInInspector][NonSerialized] public int dirtyConstraints = 0;
+
+        private bool m_dirtyActiveParticles = true;
+        public bool dirtyActiveParticles
+        {
+            set
+            {
+                // make sure anytime active particles need to be updated, simplices will be updated too:
+                m_dirtyActiveParticles = value;
+                dirtySimplices |= m_dirtyActiveParticles;
+            }
+            get { return m_dirtyActiveParticles; }
+        }
 
         private ObiCollisionEventArgs collisionArgs = new ObiCollisionEventArgs();
         private ObiCollisionEventArgs particleCollisionArgs = new ObiCollisionEventArgs();
 
+        private int m_contactCount;
+        private int m_particleContactCount;
         private float m_MaxScale = 1;
         private UnityEngine.Bounds bounds = new UnityEngine.Bounds();
         private Plane[] planes = new Plane[6];
@@ -128,35 +151,39 @@ namespace Obi
         private bool isVisible = true;
 
         // constraints:
-        [NonSerialized] private IObiConstraints[] m_Constraints = new IObiConstraints[Oni.ConstraintTypeCount];       
+        [NonSerialized] private IObiConstraints[] m_Constraints = new IObiConstraints[Oni.ConstraintTypeCount];
 
         // constraint parameters:
-        public Oni.ConstraintParameters distanceConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 3);
-        public Oni.ConstraintParameters bendingConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 3);
-        public Oni.ConstraintParameters particleCollisionConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 2);
+        public Oni.ConstraintParameters distanceConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
+        public Oni.ConstraintParameters bendingConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
+        public Oni.ConstraintParameters particleCollisionConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
         public Oni.ConstraintParameters particleFrictionConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
         public Oni.ConstraintParameters collisionConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
         public Oni.ConstraintParameters frictionConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
         public Oni.ConstraintParameters skinConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
-        public Oni.ConstraintParameters volumeConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 2);
-        public Oni.ConstraintParameters shapeMatchingConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 3);
+        public Oni.ConstraintParameters volumeConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
+        public Oni.ConstraintParameters shapeMatchingConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
         public Oni.ConstraintParameters tetherConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
-        public Oni.ConstraintParameters pinConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 3);
-        public Oni.ConstraintParameters stitchConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 2);
-        public Oni.ConstraintParameters densityConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 2);
-        public Oni.ConstraintParameters stretchShearConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 3);
-        public Oni.ConstraintParameters bendTwistConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 3);
-        public Oni.ConstraintParameters chainConstraintParameters = new Oni.ConstraintParameters(false, Oni.ConstraintParameters.EvaluationOrder.Sequential, 3);
+        public Oni.ConstraintParameters pinConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
+        public Oni.ConstraintParameters stitchConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
+        public Oni.ConstraintParameters densityConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Parallel, 1);
+        public Oni.ConstraintParameters stretchShearConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
+        public Oni.ConstraintParameters bendTwistConstraintParameters = new Oni.ConstraintParameters(true, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
+        public Oni.ConstraintParameters chainConstraintParameters = new Oni.ConstraintParameters(false, Oni.ConstraintParameters.EvaluationOrder.Sequential, 1);
 
         // rigidbodies
         ObiNativeVector4List m_RigidbodyLinearVelocities;
         ObiNativeVector4List m_RigidbodyAngularVelocities;
 
         // colors
-        [NonSerialized] private Color[] m_Colors;
+        [NonSerialized] private ObiNativeColorList m_Colors;
 
         // cell indices
         [NonSerialized] private ObiNativeInt4List m_CellCoords;
+
+        // status:
+        [NonSerialized] private ObiNativeIntList m_ActiveParticles;
+        [NonSerialized] private ObiNativeIntList m_Simplices;
 
         // positions
         [NonSerialized] private ObiNativeVector4List m_Positions;
@@ -192,9 +219,12 @@ namespace Obi
         [NonSerialized] private ObiNativeIntList m_PositionConstraintCounts;
         [NonSerialized] private ObiNativeIntList m_OrientationConstraintCounts;
 
-        // particle collisions / shape
+        // particle collisions:
         [NonSerialized] private ObiNativeIntList m_CollisionMaterials;
         [NonSerialized] private ObiNativeIntList m_Phases;
+        [NonSerialized] private ObiNativeIntList m_Filters;
+
+        // particle shape:
         [NonSerialized] private ObiNativeVector4List m_Anisotropies;
         [NonSerialized] private ObiNativeVector4List m_PrincipalRadii;
         [NonSerialized] private ObiNativeVector4List m_Normals;
@@ -241,6 +271,11 @@ namespace Obi
             get { return m_Backend; }
         }
 
+        public SimplexCounts simplexCounts
+        {
+            get { return m_SimplexCounts; }
+        }
+
         public UnityEngine.Bounds Bounds
         {
             get { return bounds; }
@@ -256,9 +291,19 @@ namespace Obi
             get { return m_MaxScale; }
         }
 
-        public int AllocParticleCount
+        public int allocParticleCount
         {
             get { return particleToActor.Count(s => s != null && s.actor != null); }
+        }
+
+        public int contactCount
+        {
+            get { return m_contactCount; }
+        }
+
+        public int particleContactCount
+        {
+            get { return m_particleContactCount; }
         }
 
         public ParticleInActor[] particleToActor
@@ -269,6 +314,28 @@ namespace Obi
                     m_ParticleToActor = new ParticleInActor[0];
 
                 return m_ParticleToActor;
+            }
+        }
+
+        public ObiNativeIntList activeParticles
+        {
+            get
+            {
+                if (m_ActiveParticles == null)
+                    m_ActiveParticles = new ObiNativeIntList();
+
+                return m_ActiveParticles;
+            }
+        }
+
+        public ObiNativeIntList simplices
+        {
+            get
+            {
+                if (m_Simplices == null)
+                    m_Simplices = new ObiNativeIntList();
+
+                return m_Simplices;
             }
         }
 
@@ -296,13 +363,13 @@ namespace Obi
             }
         }
 
-        public Color[] colors
+        public ObiNativeColorList colors
         {
             get
             {
                 if (m_Colors == null)
                 {
-                    m_Colors = new Color[0];
+                    m_Colors = new ObiNativeColorList();
                 }
                 return m_Colors;
             }
@@ -320,7 +387,7 @@ namespace Obi
             }
         }
 
-#region Position arrays
+        #region Position arrays
 
         public ObiNativeVector4List positions
         {
@@ -372,9 +439,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Orientation arrays
+        #region Orientation arrays
 
         public ObiNativeQuaternionList orientations
         {
@@ -426,9 +493,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Velocity arrays
+        #region Velocity arrays
 
         public ObiNativeVector4List velocities
         {
@@ -450,9 +517,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Mass arrays
+        #region Mass arrays
 
         public ObiNativeFloatList invMasses
         {
@@ -484,9 +551,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region External forces
+        #region External forces
 
         public ObiNativeVector4List externalForces
         {
@@ -518,9 +585,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Deltas
+        #region Deltas
 
         public ObiNativeVector4List positionDeltas
         {
@@ -562,9 +629,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Shape and phase
+        #region Shape and phase
 
         public ObiNativeIntList collisionMaterials
         {
@@ -583,6 +650,16 @@ namespace Obi
                 if (m_Phases == null)
                     m_Phases = new ObiNativeIntList();
                 return m_Phases;
+            }
+        }
+
+        public ObiNativeIntList filters
+        {
+            get
+            {
+                if (m_Filters == null)
+                    m_Filters = new ObiNativeIntList();
+                return m_Filters;
             }
         }
 
@@ -616,9 +693,9 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
-#region Fluid properties
+        #region Fluid properties
 
         public ObiNativeVector4List vorticities
         {
@@ -740,12 +817,13 @@ namespace Obi
             }
         }
 
-#endregion
+        #endregion
 
 
         void Update()
         {
-            m_MaxScale = Mathf.Max(transform.lossyScale.x, transform.lossyScale.y, transform.lossyScale.z);
+            var scale = transform.lossyScale;
+            m_MaxScale = Mathf.Max(Mathf.Max(scale.x, scale.y), scale.z);
         }
 
         private void OnDestroy()
@@ -786,9 +864,7 @@ namespace Obi
                 // Set up local actor and particle buffers:
                 actors = new List<ObiActor>();
                 freeList = new ObiNativeIntList();
-                activeParticles = new int[0];
                 m_ParticleToActor = new ParticleInActor[0];
-                m_Colors = new Color[0];
 
                 // Create constraints:
                 m_Constraints[(int)Oni.ConstraintType.Distance] = new ObiDistanceConstraintsData();
@@ -843,7 +919,7 @@ namespace Obi
             List<ObiActor> temp = new List<ObiActor>(actors);
             foreach (ObiActor actor in temp)
                 actor.RemoveFromSolver();
-    
+
             // re-add all actors.
             foreach (ObiActor actor in temp)
                 actor.AddToSolver();
@@ -871,6 +947,9 @@ namespace Obi
 
         private void FreeParticleArrays()
         {
+            activeParticles.Dispose();
+            simplices.Dispose();
+            colors.Dispose();
             cellCoords.Dispose();
             startPositions.Dispose();
             startOrientations.Dispose();
@@ -887,6 +966,7 @@ namespace Obi
             principalRadii.Dispose();
             collisionMaterials.Dispose();
             phases.Dispose();
+            filters.Dispose();
             renderablePositions.Dispose();
             renderableOrientations.Dispose();
             anisotropies.Dispose();
@@ -912,6 +992,8 @@ namespace Obi
             normals.Dispose();
             invInertiaTensors.Dispose();
 
+            m_ActiveParticles = null;
+            m_Simplices = null;
             m_Colors = null;
             m_CellCoords = null;
             m_Positions = null;
@@ -938,6 +1020,7 @@ namespace Obi
             m_OrientationConstraintCounts = null;
             m_CollisionMaterials = null;
             m_Phases = null;
+            m_Filters = null;
             m_Anisotropies = null;
             m_PrincipalRadii = null;
             m_Normals = null;
@@ -960,63 +1043,54 @@ namespace Obi
             // only resize if the count is larger than the current amount of particles:
             if (count >= positions.count)
             {
-                bool realloc = false;
-                realloc |= cellCoords.ResizeInitialized(count);
-                realloc |= startPositions.ResizeInitialized(count);
-                realloc |= positions.ResizeInitialized(count);
-                realloc |= prevPositions.ResizeInitialized(count);
-                realloc |= restPositions.ResizeInitialized(count);
-                realloc |= startOrientations.ResizeInitialized(count, Quaternion.identity);
-                realloc |= orientations.ResizeInitialized(count, Quaternion.identity);
-                realloc |= prevOrientations.ResizeInitialized(count, Quaternion.identity);
-                realloc |= restOrientations.ResizeInitialized(count, Quaternion.identity);
-                realloc |= renderablePositions.ResizeInitialized(count);
-                realloc |= renderableOrientations.ResizeInitialized(count,Quaternion.identity);
-                realloc |= velocities.ResizeInitialized(count);
-                realloc |= angularVelocities.ResizeInitialized(count);
-                realloc |= invMasses.ResizeInitialized(count);
-                realloc |= invRotationalMasses.ResizeInitialized(count);
-                realloc |= principalRadii.ResizeInitialized(count);
-                realloc |= collisionMaterials.ResizeInitialized(count);
-                realloc |= phases.ResizeInitialized(count);
-                realloc |= anisotropies.ResizeInitialized(count * 3);
-                realloc |= smoothingRadii.ResizeInitialized(count);
-                realloc |= buoyancies.ResizeInitialized(count);
-                realloc |= restDensities.ResizeInitialized(count);
-                realloc |= viscosities.ResizeInitialized(count);
-                realloc |= surfaceTension.ResizeInitialized(count);
-                realloc |= vortConfinement.ResizeInitialized(count);
-                realloc |= atmosphericDrag.ResizeInitialized(count);
-                realloc |= atmosphericPressure.ResizeInitialized(count);
-                realloc |= diffusion.ResizeInitialized(count);
-                realloc |= vorticities.ResizeInitialized(count);
-                realloc |= fluidData.ResizeInitialized(count);
-                realloc |= userData.ResizeInitialized(count);
-                realloc |= externalForces.ResizeInitialized(count);
-                realloc |= externalTorques.ResizeInitialized(count);
-                realloc |= wind.ResizeInitialized(count);
-                realloc |= positionDeltas.ResizeInitialized(count);
-                realloc |= orientationDeltas.ResizeInitialized(count, new Quaternion(0, 0, 0, 0));
-                realloc |= positionConstraintCounts.ResizeInitialized(count);
-                realloc |= orientationConstraintCounts.ResizeInitialized(count);
-                realloc |= normals.ResizeInitialized(count);
-                realloc |= invInertiaTensors.ResizeInitialized(count);
+                colors.ResizeInitialized(count);
+                startPositions.ResizeInitialized(count);
+                positions.ResizeInitialized(count);
+                prevPositions.ResizeInitialized(count);
+                restPositions.ResizeInitialized(count);
+                startOrientations.ResizeInitialized(count, Quaternion.identity);
+                orientations.ResizeInitialized(count, Quaternion.identity);
+                prevOrientations.ResizeInitialized(count, Quaternion.identity);
+                restOrientations.ResizeInitialized(count, Quaternion.identity);
+                renderablePositions.ResizeInitialized(count);
+                renderableOrientations.ResizeInitialized(count, Quaternion.identity);
+                velocities.ResizeInitialized(count);
+                angularVelocities.ResizeInitialized(count);
+                invMasses.ResizeInitialized(count);
+                invRotationalMasses.ResizeInitialized(count);
+                principalRadii.ResizeInitialized(count);
+                collisionMaterials.ResizeInitialized(count);
+                phases.ResizeInitialized(count);
+                filters.ResizeInitialized(count);
+                anisotropies.ResizeInitialized(count * 3);
+                smoothingRadii.ResizeInitialized(count);
+                buoyancies.ResizeInitialized(count);
+                restDensities.ResizeInitialized(count);
+                viscosities.ResizeInitialized(count);
+                surfaceTension.ResizeInitialized(count);
+                vortConfinement.ResizeInitialized(count);
+                atmosphericDrag.ResizeInitialized(count);
+                atmosphericPressure.ResizeInitialized(count);
+                diffusion.ResizeInitialized(count);
+                vorticities.ResizeInitialized(count);
+                fluidData.ResizeInitialized(count);
+                userData.ResizeInitialized(count);
+                externalForces.ResizeInitialized(count);
+                externalTorques.ResizeInitialized(count);
+                wind.ResizeInitialized(count);
+                positionDeltas.ResizeInitialized(count);
+                orientationDeltas.ResizeInitialized(count, new Quaternion(0, 0, 0, 0));
+                positionConstraintCounts.ResizeInitialized(count);
+                orientationConstraintCounts.ResizeInitialized(count);
+                normals.ResizeInitialized(count);
+                invInertiaTensors.ResizeInitialized(count);
 
-                // TODO: not needed, call only once after loading/unloading a blueprint.
-                // called only when the particle arrays have been reallocated (to increase capacity):
-                if (realloc)
-                    m_SolverImpl.ParticleCapacityChanged(this);
-
-                // TODO: not needed, call only once after loading/unloading a blueprint.
-                // called every time particle count has changed.
                 m_SolverImpl.ParticleCountChanged(this);
             }
 
-            if (count >= activeParticles.Length)
+            if (count >= m_ParticleToActor.Length)
             {
-                Array.Resize(ref activeParticles, count * 2);
                 Array.Resize(ref m_ParticleToActor, count * 2);
-                Array.Resize(ref m_Colors, count * 2);
             }
         }
 
@@ -1052,7 +1126,7 @@ namespace Obi
             freeList.AddRange(particleIndices);
         }
 
-        
+
         /// <summary>
         /// Adds an actor to the solver.
         /// </summary> 
@@ -1115,6 +1189,8 @@ namespace Obi
 
                 for (int i = 0; i < actor.solverIndices.Length; ++i)
                     particleToActor[actor.solverIndices[i]] = null;
+
+                FreeParticles(actor.solverIndices);
 
                 actors.RemoveAt(index);
 
@@ -1229,29 +1305,102 @@ namespace Obi
 
         private void PushActiveParticles()
         {
-            activeParticleCount = 0;
-
+            activeParticles.Clear();
             for (int i = 0; i < actors.Count; ++i)
             {
-
                 ObiActor currentActor = actors[i];
 
                 if (currentActor.isActiveAndEnabled)
                 {
                     for (int j = 0; j < currentActor.activeParticleCount; ++j)
+                        activeParticles.Add(currentActor.solverIndices[j]);
+                }
+            }
+
+            implementation.SetActiveParticles(activeParticles);
+            dirtyActiveParticles = false;
+        }
+
+        private void PushSimplices()
+        {
+            simplices.Clear();
+            points.Clear();
+            edges.Clear();
+            triangles.Clear();
+
+            for (int i = 0; i < actors.Count; ++i)
+            {
+                ObiActor currentActor = actors[i];
+
+                if (currentActor.isActiveAndEnabled && currentActor.isLoaded)
+                {
+                    //simplex based contacts
+                    if (currentActor.surfaceCollisions)
                     {
-                        activeParticles[activeParticleCount] = currentActor.solverIndices[j];
-                        activeParticleCount++;
+                        if (currentActor.blueprint.points != null)
+                            for (int j = 0; j < currentActor.blueprint.points.Length; ++j)
+                            {
+                                int actorIndex = currentActor.blueprint.points[j];
+
+                                if (actorIndex < currentActor.activeParticleCount)
+                                    points.Add(currentActor.solverIndices[actorIndex]);
+                            }
+
+                        if (currentActor.blueprint.edges != null)
+                            for (int j = 0; j < currentActor.blueprint.edges.Length / 2; ++j)
+                            {
+                                int actorIndex1 = currentActor.blueprint.edges[j * 2];
+                                int actorIndex2 = currentActor.blueprint.edges[j * 2 + 1];
+
+                                if (actorIndex1 < currentActor.activeParticleCount && actorIndex2 < currentActor.activeParticleCount)
+                                {
+                                    edges.Add(currentActor.solverIndices[actorIndex1]);
+                                    edges.Add(currentActor.solverIndices[actorIndex2]);
+                                }
+                            }
+
+                        if (currentActor.blueprint.triangles != null)
+                            for (int j = 0; j < currentActor.blueprint.triangles.Length / 3; ++j)
+                            {
+                                int actorIndex1 = currentActor.blueprint.triangles[j * 3];
+                                int actorIndex2 = currentActor.blueprint.triangles[j * 3 + 1];
+                                int actorIndex3 = currentActor.blueprint.triangles[j * 3 + 2]; // TODO: +1: degenerate triangles. check out!
+
+                                if (actorIndex1 < currentActor.activeParticleCount &&
+                                    actorIndex2 < currentActor.activeParticleCount &&
+                                    actorIndex3 < currentActor.activeParticleCount)
+                                {
+                                    triangles.Add(currentActor.solverIndices[actorIndex1]);
+                                    triangles.Add(currentActor.solverIndices[actorIndex2]);
+                                    triangles.Add(currentActor.solverIndices[actorIndex3]);
+                                }
+                            }
+                    }
+                    // particle based contacts
+                    else
+                    {
+                        // generate a point simplex out of each active particle:
+                        for (int j = 0; j < currentActor.activeParticleCount; ++j)
+                            points.Add(currentActor.solverIndices[j]);
                     }
                 }
             }
 
-            m_SolverImpl.SetActiveParticles(activeParticles, activeParticleCount);
-            dirtyActiveParticles = false;
+            simplices.capacity = points.Count + edges.Count + triangles.Count;
+            simplices.AddRange(points);
+            simplices.AddRange(edges);
+            simplices.AddRange(triangles);
+
+            m_SimplexCounts = new SimplexCounts(points.Count, edges.Count / 2, triangles.Count / 3);
+            cellCoords.ResizeInitialized(m_SimplexCounts.simplexCount);
+
+            m_SolverImpl.SetSimplices(simplices, m_SimplexCounts);
+            dirtySimplices = false;
+
         }
 
         private void PushConstraints()
-        { 
+        {
             // Clear all dirty constraints:
             for (int i = 0; i < Oni.ConstraintTypeCount; ++i)
                 if (m_Constraints[i] != null && ((1 << i) & dirtyConstraints) != 0)
@@ -1355,6 +1504,15 @@ namespace Obi
             m_SolverImpl.ApplyFrame(worldLinearInertiaScale, worldAngularInertiaScale, dt);
         }
 
+        public void PrepareFrame()
+        {
+            if (OnPrepareFrame != null)
+                OnPrepareFrame(this);
+
+            foreach (ObiActor actor in actors)
+                actor.PrepareFrame();
+        }
+
         /// <summary>
         /// Signals the start of a new time step.
         /// </summary>
@@ -1370,9 +1528,19 @@ namespace Obi
             if (!isActiveAndEnabled || !initialized)
                 return null;
 
+            if (OnPrepareStep != null)
+                OnPrepareStep(this, stepTime);
+
+            foreach (ObiActor actor in actors)
+                actor.PrepareStep(stepTime);
+
             // Update the active particles array:
             if (dirtyActiveParticles)
                 PushActiveParticles();
+
+            // Update the simplices array:
+            if (dirtySimplices)
+                PushSimplices();
 
             // Update constraint batches:
             if (dirtyConstraints != 0)
@@ -1380,6 +1548,11 @@ namespace Obi
 
             // Update inertial frame:
             UpdateTransformFrame(stepTime);
+
+            // Update gravity:
+            parameters.gravity = gravitySpace == Space.World ? transform.InverseTransformVector(gravity) : gravity;
+            if (initialized)
+                m_SolverImpl.SetParameters(parameters);
 
             // Copy positions / orientations at the start of the step, for interpolation:
             startPositions.CopyFrom(positions);
@@ -1405,7 +1578,7 @@ namespace Obi
         /// <returns>
         /// A handle to the job.
         /// </returns> 
-        public IObiJobHandle Substep(float substepTime)
+        public IObiJobHandle Substep(float stepTime, float substepTime, int index)
         {
 
             // Only update the solver if it is visible, or if we must simulate even when invisible.
@@ -1418,7 +1591,7 @@ namespace Obi
                     actor.Substep(substepTime);
 
                 // Update the solver (this is internally split in tasks so multiple solvers can be updated in parallel)
-                return m_SolverImpl.Substep(substepTime);
+                return m_SolverImpl.Substep(stepTime, substepTime, index);
             }
 
             return null;
@@ -1433,14 +1606,15 @@ namespace Obi
             if (!initialized)
                 return;
 
+            m_contactCount = implementation.GetConstraintCount(Oni.ConstraintType.Collision);
+            m_particleContactCount = implementation.GetConstraintCount(Oni.ConstraintType.ParticleCollision);
+
             if (OnCollision != null)
             {
+                collisionArgs.contacts.SetCount(m_contactCount);
 
-                int numCollisions = implementation.GetConstraintCount(Oni.ConstraintType.Collision);
-                collisionArgs.contacts.SetCount(numCollisions);
-
-                if (numCollisions > 0)
-                    implementation.GetCollisionContacts(collisionArgs.contacts.Data, numCollisions);
+                if (m_contactCount > 0)
+                    implementation.GetCollisionContacts(collisionArgs.contacts.Data, m_contactCount);
 
                 OnCollision(this, collisionArgs);
 
@@ -1448,12 +1622,10 @@ namespace Obi
 
             if (OnParticleCollision != null)
             {
+                particleCollisionArgs.contacts.SetCount(m_particleContactCount);
 
-                int numCollisions = implementation.GetConstraintCount(Oni.ConstraintType.ParticleCollision);
-                particleCollisionArgs.contacts.SetCount(numCollisions);
-
-                if (numCollisions > 0)
-                    implementation.GetParticleCollisionContacts(particleCollisionArgs.contacts.Data, numCollisions);
+                if (m_particleContactCount > 0)
+                    implementation.GetParticleCollisionContacts(particleCollisionArgs.contacts.Data, m_particleContactCount);
 
                 OnParticleCollision(this, particleCollisionArgs);
 
@@ -1474,7 +1646,7 @@ namespace Obi
         /// This is usually used for mesh generation, rendering setup and other tasks that must take place after all physics steps for this frame are done.
         /// <param name="stepTime"> Duration of this time step (in seconds). Note this is the entire timestep, not just the ast substep.</param>
         /// <param name="unsimulatedTime"> Remaining time that could not be simulated during this step (in seconds). This is used to interpolate physics state. </param>  
-        public void Interpolate(float stepTime, float unsimulatedTime) // TODO: give a better name, as "Interpolate" is too specific.
+        public void Interpolate(float stepTime, float unsimulatedTime)
         {
             if (!isActiveAndEnabled || !initialized)
                 return;
@@ -1499,7 +1671,164 @@ namespace Obi
 
         }
 
+        public void ReleaseJobHandles()
+        {
+            if (!initialized)
+                return;
 
+            m_SolverImpl.ReleaseJobHandles();
+        }
+
+        /// <summary>
+        /// Performs multiple spatial queries in parallel against all simplices in the solver, and returns a list of results.
+        /// </summary>
+        /// All other query/raycast methods are built on top of this one. Use it when you need maximum flexibility/performance.
+        /// <param name="shapes"> List of query shapes to test against all simplices in the solver.</param>
+        /// <param name="transforms"> List of transforms, must have the same size as the shapes list. </param>
+        /// <param name="results">
+        /// This list will contain results for all queries, in no specific order.
+        /// Use the queryIndex member of each query result to correlate each result to the query that spawned it. For instance:
+        /// a query result with queryIndex 5, belongs to the query shape at index 5 in the input shapes list.
+        /// </param>
+        public void SpatialQuery(ObiNativeQueryShapeList shapes, ObiNativeAffineTransformList transforms, ObiNativeQueryResultList results)
+        {
+            if (!initialized || shapes == null || transforms == null || results == null || shapes.count != transforms.count)
+                return;
+
+            m_SolverImpl.SpatialQuery(shapes, transforms, results);
+        }
+
+        /// <summary>
+        /// Performs a single spatial queries against all simplices in the solver, and returns a list of results.
+        /// </summary>
+        /// <param name="shape"> Query shape to test against all simplices in the solver.</param>
+        /// <param name="transform"> Transform applied to the query shape. </param>
+        /// <returns>
+        /// An array that contains the query results.
+        /// </returns>
+        public QueryResult[] SpatialQuery(QueryShape shape, AffineTransform transform)
+        {
+            if (!initialized)
+                return null;
+
+            var queries = new ObiNativeQueryShapeList();
+            var transforms = new ObiNativeAffineTransformList();
+            var results = new ObiNativeQueryResultList();
+
+            queries.Add(shape);
+            transforms.Add(transform);
+
+            m_SolverImpl.SpatialQuery(queries, transforms, results);
+
+            var resultsArray = results.ToArray();
+
+            queries.Dispose();
+            transforms.Dispose();
+            results.Dispose();
+
+            return resultsArray;
+        }
+
+        /// <summary>
+        /// Performs a single raycast  against all simplices in the solver, and returns the result.
+        /// </summary>
+        /// <param name="ray"> Ray to cast against all simplices in the solver. Expressed in world space.</param>
+        /// <param name="hitInfo"> Struct containing hit info, if any. </param>
+        /// <param name="filter"> Filter (mask, category) used to filter out collisions against certain simplices. </param>
+        /// <param name="maxDistance"> Ray length. </param>
+        /// <param name="rayThickness">
+        /// Ray thickness. If the ray hits a simplex, hitInfo will contain a point on the simplex.
+        /// If it merely passes near the simplex (within its thickness distance, but no actual hit), it will contain the point on the ray closest to the simplex surface. </param>
+        /// <returns>
+        /// Whether the ray hit anything. If the ray did not hit, the hitInfo will contain a simplexIndex of -1 and a distance equal to maxDistance.
+        /// </returns>
+        public bool Raycast(Ray ray, out QueryResult hitInfo, int filter, float maxDistance = 100, float rayThickness = 0)
+        {
+            var result = Raycast(new List<Ray> { ray }, filter, maxDistance, rayThickness);
+            if (result != null && result.Length > 0 && result[0].simplexIndex >= 0)
+            {
+                hitInfo = result[0];
+                return true;
+            }
+            else
+            {
+                hitInfo = new QueryResult() { distance = maxDistance };
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Performs multiple raycasts in parallel against all simplices in the solver, and returns the results.
+        /// </summary>
+        /// <param name="rays"> List of rays to cast against all simplices in the solver. Expressed in world space.</param>
+        /// <param name="filter"> Filter (mask, category) used to filter out collisions against certain simplices. </param>
+        /// <param name="maxDistance"> Ray length. </param>
+        /// <param name="rayThickness">
+        /// Ray thickness. If the ray hits a simplex, hitInfo will contain a point on the simplex.
+        /// If it merely passes near the simplex (within its thickness distance, but no actual hit), it will contain the point on the ray closest to the simplex surface. </param>
+        /// <returns>
+        /// This list will contain results for all raycasts, in no specific order.
+        /// Use the queryIndex member of each query result to correlate each result to the raycast that spawned it. For instance:
+        /// a query result with queryIndex 5, belongs to the raycast at index 5 in the input rays list.
+        /// </returns>
+        public QueryResult[] Raycast(List<Ray> rays, int filter, float maxDistance = 100, float rayThickness = 0)
+        {
+            if (!initialized)
+                return null;
+
+            var queries = new ObiNativeQueryShapeList();
+            var transforms = new ObiNativeAffineTransformList();
+            var results = new ObiNativeQueryResultList();
+            var resultArray = new QueryResult[rays.Count];
+
+            for (int i = 0; i < rays.Count; ++i)
+            {
+                queries.Add(new QueryShape()
+                {
+                    type = QueryShape.QueryType.Ray,
+                    center = rays[i].origin,
+                    size = rays[i].origin + rays[i].direction * maxDistance,
+                    contactOffset = rayThickness,
+                    maxDistance = 0.0005f,
+                    filter = filter
+                });
+
+                transforms.Add(new AffineTransform(Vector4.zero, Quaternion.identity, Vector4.one));
+
+                resultArray[i] = new QueryResult { distance = maxDistance, simplexIndex = -1, queryIndex = -1 };
+            }
+
+            m_SolverImpl.SpatialQuery(queries, transforms, results);
+
+            Matrix4x4 solver2World = transform.localToWorldMatrix;
+            for (int i = 0; i < results.count; ++i)
+            {
+                int rayIndex = results[i].queryIndex;
+                var pointWS = solver2World.MultiplyPoint3x4(results[i].queryPoint + results[i].normal * results[i].distance);
+
+                if (results[i].distance <= 0.001f)
+                {
+                    // project the hit on the ray:
+                    float rayDistance = (pointWS.x - rays[rayIndex].origin.x) * rays[rayIndex].direction.x +
+                                        (pointWS.y - rays[rayIndex].origin.y) * rays[rayIndex].direction.y +
+                                        (pointWS.z - rays[rayIndex].origin.z) * rays[rayIndex].direction.z;
+
+                    // keep the closest hit:
+                    if (rayDistance < resultArray[rayIndex].distance)
+                    {
+                        resultArray[rayIndex] = results[i];
+                        resultArray[rayIndex].distance = rayDistance;
+                        resultArray[rayIndex].queryPoint = rays[rayIndex].origin + rays[rayIndex].direction * rayDistance;
+                    }
+                }
+            }
+
+            queries.Dispose();
+            transforms.Dispose();
+            results.Dispose();
+
+            return resultArray;
+        }
     }
 
 }

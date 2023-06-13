@@ -1,34 +1,62 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
-using System;
-using System.Collections.Generic;
-using UnityEngine;
 using Unity.Collections;
-using Unity.Jobs;
 using Unity.Mathematics;
-using Unity.Burst;
 
 namespace Obi
 {
-    public static class BurstHeightField
+    public struct BurstHeightField : BurstLocalOptimization.IDistanceFunction, IBurstCollider
     {
-        public static void Contacts(int particleIndex,
-                                    int colliderIndex,
-                                    float4 position,
-                                    quaternion orientation,
-                                    float4 radii,
-                                    ref NativeArray<float> heightMap,
-                                    HeightFieldHeader header,
-                                    BurstAffineTransform colliderToSolver,
-                                    BurstColliderShape shape,
-                                    NativeQueue<BurstContact>.ParallelWriter contacts)
-        {
-            float4 pos = colliderToSolver.InverseTransformPoint(position);
 
-            BurstContact c = new BurstContact
-            {
-                entityA = particleIndex,
-                entityB = colliderIndex,
-            };
+        public BurstColliderShape shape;
+        public BurstAffineTransform colliderToSolver;
+        public BurstAffineTransform solverToWorld;
+        public float dt;
+        public float collisionMargin;
+
+        public BurstMath.CachedTri tri;
+        public float4 triNormal;
+
+        public HeightFieldHeader header;
+        public NativeArray<float> heightFieldSamples;
+
+        public void Evaluate(float4 point, float4 radii, quaternion orientation, ref BurstLocalOptimization.SurfacePoint projectedPoint)
+        {
+            point = colliderToSolver.InverseTransformPoint(point);
+
+            float4 nearestPoint = BurstMath.NearestPointOnTri(tri, point, out float4 bary);
+            float4 normal = math.normalizesafe(point - nearestPoint);
+
+            // flip the contact normal if it points below ground: (doesn't work with holes)
+            //BurstMath.OneSidedNormal(triNormal, ref normal);
+
+            projectedPoint.point = colliderToSolver.TransformPoint(nearestPoint + normal * shape.contactOffset);
+            projectedPoint.normal = colliderToSolver.TransformDirection(normal);
+        }
+
+        public void Contacts(int colliderIndex,
+                             int rigidbodyIndex,
+                              NativeArray<BurstRigidbody> rigidbodies,
+
+                              NativeArray<float4> positions,
+                              NativeArray<quaternion> orientations,
+                              NativeArray<float4> velocities,
+                              NativeArray<float4> radii,
+
+                              NativeArray<int> simplices,
+                              in BurstAabb simplexBounds,
+                              int simplexIndex,
+                              int simplexStart,
+                              int simplexSize,
+
+                              NativeQueue<BurstContact>.ParallelWriter contacts,
+                              int optimizationIterations,
+                              float optimizationTolerance)
+        {
+            if (shape.dataIndex < 0) return;
+
+            triNormal = float4.zero;
+
+            var co = new BurstContact() { bodyA = simplexIndex, bodyB = colliderIndex };
 
             int resolutionU = (int)shape.center.x;
             int resolutionV = (int)shape.center.y;
@@ -38,8 +66,8 @@ namespace Obi
             float cellHeight = shape.size.z / (resolutionV - 1);
 
             // calculate particle bounds min/max cells:
-            int2 min = new int2((int)math.floor((pos[0] - radii[0]) / cellWidth), (int)math.floor((pos[2] - radii[0]) / cellHeight));
-            int2 max = new int2((int)math.floor((pos[0] + radii[0]) / cellWidth), (int)math.floor((pos[2] + radii[0]) / cellHeight));
+            int2 min = new int2((int)math.floor(simplexBounds.min[0] / cellWidth), (int)math.floor(simplexBounds.min[2] / cellHeight));
+            int2 max = new int2((int)math.floor(simplexBounds.max[0] / cellWidth), (int)math.floor(simplexBounds.max[2] / cellHeight));
 
             for (int su = min[0]; su <= max[0]; ++su)
             {
@@ -54,59 +82,100 @@ namespace Obi
                             int csv1 = math.clamp(sv + 1, 0, resolutionV - 1);
 
                             // sample heights:
-                            float h1 = heightMap[header.firstSample + sv * resolutionU + su] * shape.size.y;
-                            float h2 = heightMap[header.firstSample + sv * resolutionU + csu1] * shape.size.y;
-                            float h3 = heightMap[header.firstSample + csv1 * resolutionU + su] * shape.size.y;
-                            float h4 = heightMap[header.firstSample + csv1 * resolutionU + csu1] * shape.size.y;
+                            float h1 = heightFieldSamples[header.firstSample + sv * resolutionU + su] * shape.size.y;
+                            float h2 = heightFieldSamples[header.firstSample + sv * resolutionU + csu1] * shape.size.y;
+                            float h3 = heightFieldSamples[header.firstSample + csv1 * resolutionU + su] * shape.size.y;
+                            float h4 = heightFieldSamples[header.firstSample + csv1 * resolutionU + csu1] * shape.size.y;
+
+                            if (h1 < 0) continue;
+                            h1 = math.abs(h1);
+                            h2 = math.abs(h2);
+                            h3 = math.abs(h3);
+                            h4 = math.abs(h4);
 
                             float min_x = su * shape.size.x / (resolutionU - 1);
                             float max_x = csu1 * shape.size.x / (resolutionU - 1);
                             float min_z = sv * shape.size.z / (resolutionV - 1);
                             float max_z = csv1 * shape.size.z / (resolutionV - 1);
 
-                            // contact with the first triangle:
-                            float4 pointOnTri = BurstMath.NearestPointOnTri(new float4(min_x, h3, max_z, 0),
-                                                                             new float4(max_x, h4, max_z, 0),
-                                                                             new float4(min_x, h1, min_z, 0),
-                                                                             pos);
-                            float4 normal = pos - pointOnTri;
-                            float distance = math.length(normal);
+                            float4 convexPoint;
+                            float4 simplexBary = BurstMath.BarycenterForSimplexOfSize(simplexSize);
 
-                            if (distance > BurstMath.epsilon)
+                            // ------contact against the first triangle------:
+                            float4 v1 = new float4(min_x, h3, max_z, 0);
+                            float4 v2 = new float4(max_x, h4, max_z, 0);
+                            float4 v3 = new float4(min_x, h1, min_z, 0);
+
+                            tri.Cache(v1, v2, v3);
+                            triNormal.xyz = math.normalizesafe(math.cross((v2 - v1).xyz, (v3 - v1).xyz));
+
+                            var colliderPoint = BurstLocalOptimization.Optimize<BurstHeightField>(ref this, positions, orientations, radii, simplices, simplexStart, simplexSize,
+                                                                                ref simplexBary, out convexPoint, optimizationIterations, optimizationTolerance);
+
+                            float4 velocity = float4.zero;
+                            float simplexRadius = 0;
+                            for (int j = 0; j < simplexSize; ++j)
                             {
-                                c.normal = normal / distance;
-                                c.point = pointOnTri;
-
-                                c.normal = colliderToSolver.TransformDirection(c.normal);
-                                c.point = colliderToSolver.TransformPoint(c.point);
-
-                                c.distance = distance - (shape.contactOffset + BurstMath.EllipsoidRadius(c.normal, orientation, radii.xyz));
-                                contacts.Enqueue(c);
+                                int particleIndex = simplices[simplexStart + j];
+                                simplexRadius += radii[particleIndex].x * simplexBary[j];
+                                velocity += velocities[particleIndex] * simplexBary[j];
                             }
 
-                            // contact with the second triangle:
-                            pointOnTri = BurstMath.NearestPointOnTri(new float4(min_x, h1, min_z, 0),
-                                                                     new float4(max_x, h4, max_z, 0),
-                                                                     new float4(max_x, h2, min_z, 0),
-                                                                     pos);
-                            normal = pos - pointOnTri;
-                            distance = math.length(normal);
+                            float4 rbVelocity = float4.zero;
+                            if (rigidbodyIndex >= 0)
+                                rbVelocity = BurstMath.GetRigidbodyVelocityAtPoint(rigidbodyIndex, colliderPoint.point, rigidbodies, solverToWorld);
 
-                            if (distance > BurstMath.epsilon)
+                            float dAB = math.dot(convexPoint - colliderPoint.point, colliderPoint.normal);
+                            float vel = math.dot(velocity - rbVelocity, colliderPoint.normal);
+
+                            if (vel * dt + dAB <= simplexRadius + shape.contactOffset + collisionMargin)
                             {
-                                c.normal = normal / distance;
-                                c.point = pointOnTri;
+                                co.pointB = colliderPoint.point;
+                                co.normal = colliderPoint.normal;
+                                co.pointA = simplexBary;
+                                contacts.Enqueue(co);
+                            }
 
-                                c.normal = colliderToSolver.TransformDirection(c.normal);
-                                c.point = colliderToSolver.TransformPoint(c.point);
+                            // ------contact against the second triangle------:
+                            v1 = new float4(min_x, h1, min_z, 0);
+                            v2 = new float4(max_x, h4, max_z, 0);
+                            v3 = new float4(max_x, h2, min_z, 0);
 
-                                c.distance = distance - (shape.contactOffset + BurstMath.EllipsoidRadius(c.normal, orientation, radii.xyz));
-                                contacts.Enqueue(c);
+                            tri.Cache(v1, v2, v3);
+                            triNormal.xyz = math.normalizesafe(math.cross((v2 - v1).xyz, (v3 - v1).xyz));
+
+                            colliderPoint = BurstLocalOptimization.Optimize<BurstHeightField>(ref this, positions, orientations, radii, simplices, simplexStart, simplexSize,
+                                                                                ref simplexBary, out convexPoint, optimizationIterations, optimizationTolerance);
+
+                            velocity = float4.zero;
+                            simplexRadius = 0;
+                            for (int j = 0; j < simplexSize; ++j)
+                            {
+                                int particleIndex = simplices[simplexStart + j];
+                                simplexRadius += radii[particleIndex].x * simplexBary[j];
+                                velocity += velocities[particleIndex] * simplexBary[j];
+                            }
+
+                            rbVelocity = float4.zero;
+                            if (rigidbodyIndex >= 0)
+                                rbVelocity = BurstMath.GetRigidbodyVelocityAtPoint(rigidbodyIndex, colliderPoint.point, rigidbodies, solverToWorld);
+
+                            dAB = math.dot(convexPoint - colliderPoint.point, colliderPoint.normal);
+                            vel = math.dot(velocity - rbVelocity, colliderPoint.normal);
+
+                            if (vel * dt + dAB <= simplexRadius + shape.contactOffset + collisionMargin)
+                            {
+                                co.pointB = colliderPoint.point;
+                                co.normal = colliderPoint.normal;
+                                co.pointA = simplexBary;
+
+                                contacts.Enqueue(co);
                             }
                         }
                     }
                 }
             }
+            
         }
 
     }

@@ -1,31 +1,45 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-
-public class Coin : MonoBehaviour
+using Obi;
+namespace JellerFellers
 {
-
-    [SerializeField]
-    AudioClip clip;
-    [SerializeField]
-    float rotatespeed=10;
-    private void OnTriggerEnter(Collider other)
+    public class Coin : MonoBehaviour
     {
-        Debug.Log("hit");
-        if (other.tag == "Player")
+
+        [SerializeField]
+        AudioClip clip;
+        [SerializeField]
+        float rotatespeed = 10;
+        /*
+        private void OnTriggerEnter(Collider other)
         {
-            Debug.Log(other.transform.parent.name);
-            CharacterController player = FindObjectOfType<CharacterController>();
+            if (other.tag == "Player")
+            {
+                CollectCoin();  
+            }
+        }*/
+
+        public void Start()
+        {
+
+            FindObjectOfType<LevelCollisionHandler>().AddCoin(this.GetComponent<ObiCollider>());
+
+        }
+
+        public void CollectCoin()
+        {
+            Player_Controller_Obi player = FindObjectOfType<Player_Controller_Obi>();
             player.coins++;
             player.coinText.text = (player.coins.ToString());
             player.aud.clip = clip;
             player.aud.Play();
             Destroy(this.gameObject);
         }
-    }
 
-    private void Update()
-    {
-        transform.Rotate(0,rotatespeed*Time.deltaTime,0);
+        private void Update()
+        {
+            transform.Rotate(0, rotatespeed * Time.deltaTime, 0);
+        }
     }
 }

@@ -2,63 +2,70 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-public class LevelManager : MonoBehaviour
+
+namespace JellerFellers
 {
-    // Start is called before the first frame update
-    void Start()
+
+
+    public class LevelManager : MonoBehaviour
     {
-        DontDestroyOnLoad(this);
-
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
-
-    public void LoadNextLevel()
-    {
-        //unlock the current level for selection
-        UnlockLevel(SceneManager.GetActiveScene().name);
-
-        if (SceneManager.GetActiveScene().buildIndex + 1 < SceneManager.sceneCountInBuildSettings)
+        // Start is called before the first frame update
+        void Start()
         {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex + 1);
+            DontDestroyOnLoad(this);
+
         }
-        else
-        {
-            SceneManager.LoadScene(0);
-        }
-    }
-    public void LoadLevel(string levelname)
-    {
-        SceneManager.LoadScene(levelname);
-    }
-    public void QuitApp()
-    {
-        Application.Quit();
-    }
 
-    public void LoadLevels()
-    {
-        foreach (LevelInfo level in FindObjectsOfType<LevelInfo>())
+        // Update is called once per frame
+        void Update()
         {
-            if (PlayerPrefs.GetInt(level.LevelName) == 1)
+
+        }
+
+        public void LoadNextLevel()
+        {
+            Debug.Log("Load Level");
+            //unlock the current level for selection
+            UnlockLevel(SceneManager.GetActiveScene().name);
+
+            if (SceneManager.GetActiveScene().buildIndex + 1 < SceneManager.sceneCountInBuildSettings)
             {
-                {
-                    level.locked = true;
-                }
+                SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex + 1);
             }
             else
             {
-                level.locked = false;
+                SceneManager.LoadScene(0);
             }
-
         }
-    }
-    public void UnlockLevel(string level)
-    {
-        PlayerPrefs.SetInt(level, 1);
+        public void LoadLevel(string levelname)
+        {
+            SceneManager.LoadScene(levelname);
+        }
+        public void QuitApp()
+        {
+            Application.Quit();
+        }
+
+        public void LoadLevels()
+        {
+            foreach (LevelInfo level in FindObjectsOfType<LevelInfo>())
+            {
+                if (PlayerPrefs.GetInt(level.LevelName) == 1)
+                {
+                    {
+                        level.locked = true;
+                    }
+                }
+                else
+                {
+                    level.locked = false;
+                }
+
+            }
+        }
+        public void UnlockLevel(string level)
+        {
+            PlayerPrefs.SetInt(level, 1);
+        }
     }
 }

@@ -5,6 +5,7 @@ namespace Obi
 {
     [AddComponentMenu("Physics/Obi/Obi Particle Attachment", 820)]
     [RequireComponent(typeof(ObiActor))]
+    [ExecuteInEditMode]
     public class ObiParticleAttachment : MonoBehaviour
     {
         public enum AttachmentType
@@ -14,18 +15,19 @@ namespace Obi
         }
 
         [SerializeField] [HideInInspector] private ObiActor m_Actor;
-
         [SerializeField] [HideInInspector] private Transform m_Target;
+
         [SerializeField] [HideInInspector] private ObiParticleGroup m_ParticleGroup;
         [SerializeField] [HideInInspector] private AttachmentType m_AttachmentType = AttachmentType.Static;
         [SerializeField] [HideInInspector] private bool m_ConstrainOrientation = false;
         [SerializeField] [HideInInspector] private float m_Compliance = 0;
         [SerializeField] [HideInInspector] [Delayed] private float m_BreakThreshold = float.PositiveInfinity;
 
-        private ObiPinConstraintsBatch pinBatch;
-        private int pinBatchIndex = -1;
-
         // private variables are serialized during script reloading, to keep their value. Must mark them explicitly as non-serialized.
+        [NonSerialized] private ObiPinConstraintsBatch pinBatch;
+        [NonSerialized] private ObiColliderBase attachedCollider;
+        [NonSerialized] private int attachedColliderHandleIndex;
+
         [NonSerialized] private int[] m_SolverIndices;
         [NonSerialized] private Vector3[] m_PositionOffsets = null;
         [NonSerialized] private Quaternion[] m_OrientationOffsets = null;
@@ -92,9 +94,9 @@ namespace Obi
             {
                 if (value != m_AttachmentType)
                 {
-                    Disable(m_AttachmentType);
+                    DisableAttachment(m_AttachmentType);
                     m_AttachmentType = value;
-                    Enable(m_AttachmentType);
+                    EnableAttachment(m_AttachmentType);
                 }
             }
         }
@@ -109,9 +111,9 @@ namespace Obi
             {
                 if (value != m_ConstrainOrientation)
                 {
-                    Disable(m_AttachmentType);
+                    DisableAttachment(m_AttachmentType);
                     m_ConstrainOrientation = value;
-                    Enable(m_AttachmentType);
+                    EnableAttachment(m_AttachmentType);
                 }
             }
         }
@@ -159,32 +161,26 @@ namespace Obi
             }
         }
 
-        private void Awake()
+        private void OnEnable()
         {
             m_Actor = GetComponent<ObiActor>();
             m_Actor.OnBlueprintLoaded += Actor_OnBlueprintLoaded;
-            m_Actor.OnBeginStep += Actor_OnBeginStep;
+            m_Actor.OnPrepareStep += Actor_OnPrepareStep;
             m_Actor.OnEndStep += Actor_OnEndStep;
 
             if (m_Actor.solver != null)
                 Actor_OnBlueprintLoaded(m_Actor, m_Actor.sourceBlueprint);
-        }
 
-        private void OnDestroy()
-        {
-            m_Actor.OnBlueprintLoaded -= Actor_OnBlueprintLoaded;
-            m_Actor.OnBeginStep -= Actor_OnBeginStep;
-            m_Actor.OnEndStep -= Actor_OnEndStep;
-        }
-
-        private void OnEnable()
-        {
-            Enable(m_AttachmentType);
+            EnableAttachment(m_AttachmentType);
         }
 
         private void OnDisable()
         {
-            Disable(m_AttachmentType);
+            DisableAttachment(m_AttachmentType);
+
+            m_Actor.OnBlueprintLoaded -= Actor_OnBlueprintLoaded;
+            m_Actor.OnPrepareStep -= Actor_OnPrepareStep;
+            m_Actor.OnEndStep -= Actor_OnEndStep;
         }
 
         private void OnValidate()
@@ -192,9 +188,9 @@ namespace Obi
             m_Actor = GetComponent<ObiActor>();
 
             // do not re-bind: simply disable and re-enable the attachment.
-            Disable(AttachmentType.Static);
-            Disable(AttachmentType.Dynamic);
-            Enable(m_AttachmentType);
+            DisableAttachment(AttachmentType.Static);
+            DisableAttachment(AttachmentType.Dynamic);
+            EnableAttachment(m_AttachmentType);
         }
 
         void Actor_OnBlueprintLoaded(ObiActor act, ObiActorBlueprint blueprint)
@@ -202,27 +198,27 @@ namespace Obi
             Bind();
         }
 
-        void Actor_OnBeginStep(ObiActor act, float stepTime)
+        void Actor_OnPrepareStep(ObiActor act, float stepTime)
         {
-            // static attachments must be updated at the start of the step, before performing any simulation.
-            UpdateStaticAttachment(stepTime);
+            // Attachments must be updated at the start of the step, before performing any simulation.
+            UpdateAttachment();
         }
 
-        private void Actor_OnEndStep(ObiActor actor, float stepTime)
+        private void Actor_OnEndStep(ObiActor act, float stepTime)
         {
             // dynamic attachments must be tested at the end of the step, once constraint forces have been calculated.
             // if there's any broken constraint, flag pin constraints as dirty for remerging at the start of the next step.
-            UpdateDynamicAttachment(stepTime);
+            BreakDynamicAttachment(stepTime);
         }
 
         private void Bind()
         {
             // Disable attachment.
-            Disable(m_AttachmentType);
+            DisableAttachment(m_AttachmentType);
 
-            if (m_ParticleGroup != null && m_Actor.solver != null)
+            if (m_Target != null && m_ParticleGroup != null && m_Actor.isLoaded)
             {
-                Matrix4x4 bindMatrix = m_Target != null ? m_Target.worldToLocalMatrix * m_Actor.solver.transform.localToWorldMatrix : Matrix4x4.identity;
+                Matrix4x4 bindMatrix = m_Target.worldToLocalMatrix * m_Actor.solver.transform.localToWorldMatrix;
 
                 m_SolverIndices = new int[m_ParticleGroup.Count];
                 m_PositionOffsets = new Vector3[m_ParticleGroup.Count];
@@ -264,25 +260,23 @@ namespace Obi
                 m_OrientationOffsets = null;
             }
 
-            Enable(m_AttachmentType);
+            EnableAttachment(m_AttachmentType);
         }
 
 
-        private void Enable(AttachmentType type)
-        { 
+        private void EnableAttachment(AttachmentType type)
+        {
 
             if (enabled && m_Actor.isLoaded && isBound)
             {
-
                 var solver = m_Actor.solver;
-                var blueprint = m_Actor.sourceBlueprint;
 
                 switch (type)
                 {
                     case AttachmentType.Dynamic:
 
                         var pins = m_Actor.GetConstraintsByType(Oni.ConstraintType.Pin) as ObiPinConstraintsData;
-                        ObiColliderBase attachedCollider = m_Target.GetComponent<ObiColliderBase>();
+                        attachedCollider = m_Target.GetComponent<ObiColliderBase>();
 
                         if (pins != null && attachedCollider != null && pinBatch == null)
                         {
@@ -301,9 +295,13 @@ namespace Obi
                                 pinBatch.activeConstraintCount++;
                             }
 
-                            // add the batch to the solver, and store its index for later use.
-                            pinBatchIndex = pins.GetBatchCount();
+                            // add the batch to the actor:
                             pins.AddBatch(pinBatch);
+
+                            // store the attached collider's handle:
+                            attachedColliderHandleIndex = -1;
+                            if (attachedCollider.Handle != null)
+                                attachedColliderHandleIndex = attachedCollider.Handle.index;
 
                             m_Actor.SetConstraintsDirty(Oni.ConstraintType.Pin);
                         }
@@ -332,39 +330,51 @@ namespace Obi
 
         }
 
-        private void Disable(AttachmentType type)
+        private void DisableAttachment(AttachmentType type)
         {
-            if (actor.isLoaded && isBound)
+            if (isBound)
             {
-                var solver = m_Actor.solver;
-                var blueprint = m_Actor.sourceBlueprint;
-
                 switch (type)
                 {
                     case AttachmentType.Dynamic:
 
-                        var pins = m_Actor.GetConstraintsByType(Oni.ConstraintType.Pin) as ObiConstraints<ObiPinConstraintsBatch>;
-                        if (pins != null && pinBatch != null)
+                        if (pinBatch != null)
                         {
-                            pins.RemoveBatch(pinBatch);
+                            var pins = m_Actor.GetConstraintsByType(Oni.ConstraintType.Pin) as ObiConstraints<ObiPinConstraintsBatch>;
+                            if (pins != null)
+                            {
+                                pins.RemoveBatch(pinBatch);
+                                if (actor.isLoaded)
+                                    m_Actor.SetConstraintsDirty(Oni.ConstraintType.Pin);
+                            }
+
+                            attachedCollider = null;
                             pinBatch = null;
-                            pinBatchIndex = -1;
-                            m_Actor.SetConstraintsDirty(Oni.ConstraintType.Pin);
+                            attachedColliderHandleIndex = -1;
                         }
 
                         break;
 
                     case AttachmentType.Static:
 
+                        var solver = m_Actor.solver;
+                        var blueprint = m_Actor.sourceBlueprint;
+
                         for (int i = 0; i < m_SolverIndices.Length; ++i)
-                            if (m_SolverIndices[i] >= 0 && m_SolverIndices[i] < solver.invMasses.count)
-                                solver.invMasses[m_SolverIndices[i]] = blueprint.invMasses[i];
+                        {
+                            int solverIndex = m_SolverIndices[i];
+                            if (solverIndex >= 0 && solverIndex < solver.invMasses.count)
+                                solver.invMasses[solverIndex] = blueprint.invMasses[i];
+                        }
 
                         if (m_Actor.usesOrientedParticles)
                         {
                             for (int i = 0; i < m_SolverIndices.Length; ++i)
-                                if (m_SolverIndices[i] >= 0 && m_SolverIndices[i] < solver.invRotationalMasses.count)
-                                    solver.invRotationalMasses[m_SolverIndices[i]] = blueprint.invRotationalMasses[i];
+                            {
+                                int solverIndex = m_SolverIndices[i];
+                                if (solverIndex >= 0 && solverIndex < solver.invRotationalMasses.count)
+                                    solver.invRotationalMasses[solverIndex] = blueprint.invRotationalMasses[i];
+                            }
                         }
 
                         m_Actor.UpdateParticleProperties();
@@ -375,85 +385,122 @@ namespace Obi
             }
         }
 
-        private void UpdateStaticAttachment(float stepTime)
+        private void UpdateAttachment()
         {
 
-            if (enabled && m_AttachmentType == AttachmentType.Static && m_Actor.isLoaded && isBound)
+            if (enabled && m_Actor.isLoaded && isBound)
             {
                 var solver = m_Actor.solver;
-                var blueprint = m_Actor.sourceBlueprint;
 
-                // Build the attachment matrix:
-                Matrix4x4 attachmentMatrix = solver.transform.worldToLocalMatrix * m_Target.localToWorldMatrix;
-
-                // Fix all particles in the group and update their position:
-                for (int i = 0; i < m_SolverIndices.Length; ++i)
+                switch (m_AttachmentType)
                 {
-                    int solverIndex = m_SolverIndices[i];
+                    case AttachmentType.Dynamic:
 
-                    if (solverIndex >= 0 && solverIndex < solver.invMasses.count)
-                    {
-                        solver.invMasses[solverIndex] = 0;
-                        solver.velocities[solverIndex] = Vector3.zero;
-
-                        // Note: skip assignment to startPositions if you want attached particles to be interpolated too.
-                        solver.startPositions[solverIndex] = solver.positions[solverIndex] = attachmentMatrix.MultiplyPoint3x4(m_PositionOffsets[i]);
-                    }
-                }
-
-                if (m_Actor.usesOrientedParticles && m_ConstrainOrientation)
-                {
-                    Quaternion attachmentRotation = attachmentMatrix.rotation;
-
-                    for (int i = 0; i < m_SolverIndices.Length; ++i)
-                    {
-                        int solverIndex = m_SolverIndices[i];
-
-                        if (solverIndex >= 0 && solverIndex < solver.invRotationalMasses.count)
+                        // in case the handle has been updated/invalidated (for instance, when disabling the target) rebuild constraints:
+                        if (attachedCollider != null &&
+                            attachedCollider.Handle != null &&
+                            attachedCollider.Handle.index != attachedColliderHandleIndex)
                         {
-                            solver.invRotationalMasses[solverIndex] = 0;
-                            solver.angularVelocities[solverIndex] = Vector3.zero;
-
-                            // Note: skip assignment to startPositions if you want attached particles to be interpolated too.
-                            solver.startOrientations[solverIndex] = solver.orientations[solverIndex] = attachmentRotation * m_OrientationOffsets[i];
+                            attachedColliderHandleIndex = attachedCollider.Handle.index;
+                            m_Actor.SetConstraintsDirty(Oni.ConstraintType.Pin);
                         }
-                    }
+
+                        break;
+
+                    case AttachmentType.Static:
+
+                        var blueprint = m_Actor.sourceBlueprint;
+                        bool targetActive = m_Target.gameObject.activeInHierarchy;
+
+                        // Build the attachment matrix:
+                        Matrix4x4 attachmentMatrix = solver.transform.worldToLocalMatrix * m_Target.localToWorldMatrix;
+
+                        // Fix all particles in the group and update their position 
+                        // Note: skip assignment to startPositions if you want attached particles to be interpolated too.
+                        for (int i = 0; i < m_SolverIndices.Length; ++i)
+                        {
+                            int solverIndex = m_SolverIndices[i];
+
+                            if (solverIndex >= 0 && solverIndex < solver.invMasses.count)
+                            {
+                                if (targetActive)
+                                {
+                                    solver.invMasses[solverIndex] = 0;
+                                    solver.velocities[solverIndex] = Vector3.zero;
+                                    solver.startPositions[solverIndex] = solver.positions[solverIndex] = attachmentMatrix.MultiplyPoint3x4(m_PositionOffsets[i]);
+                                }else
+                                    solver.invMasses[solverIndex] = blueprint.invMasses[i];
+                            }
+                        }
+
+                        if (m_Actor.usesOrientedParticles && m_ConstrainOrientation)
+                        {
+                            Quaternion attachmentRotation = attachmentMatrix.rotation;
+
+                            for (int i = 0; i < m_SolverIndices.Length; ++i)
+                            {
+                                int solverIndex = m_SolverIndices[i];
+
+                                if (solverIndex >= 0 && solverIndex < solver.invRotationalMasses.count)
+                                {
+                                    if (targetActive)
+                                    {
+                                        solver.invRotationalMasses[solverIndex] = 0;
+                                        solver.angularVelocities[solverIndex] = Vector3.zero;
+                                        solver.startOrientations[solverIndex] = solver.orientations[solverIndex] = attachmentRotation * m_OrientationOffsets[i];
+                                    }
+                                    else
+                                        solver.invRotationalMasses[solverIndex] = blueprint.invRotationalMasses[i];
+                                }
+                            }
+                        }
+                        break;
                 }
             }
         }
 
-        private void UpdateDynamicAttachment(float stepTime)
+        private void BreakDynamicAttachment(float stepTime)
         {
 
             if (enabled && m_AttachmentType == AttachmentType.Dynamic && m_Actor.isLoaded && isBound)
             {
 
                 var solver = m_Actor.solver;
-                var blueprint = m_Actor.sourceBlueprint;
 
                 var actorConstraints = m_Actor.GetConstraintsByType(Oni.ConstraintType.Pin) as ObiConstraints<ObiPinConstraintsBatch>;
                 var solverConstraints = solver.GetConstraintsByType(Oni.ConstraintType.Pin) as ObiConstraints<ObiPinConstraintsBatch>;
 
-                bool torn = false;
+                bool dirty = false;
                 if (actorConstraints != null && pinBatch != null)
                 {
-                    // deactivate constraints over the break threshold.
-                    int offset = actor.solverBatchOffsets[(int)Oni.ConstraintType.Pin][pinBatchIndex];
-                    var solverBatch = solverConstraints.batches[pinBatchIndex];
-
-                    float sqrTime = stepTime * stepTime;
-                    for (int i = 0; i < pinBatch.activeConstraintCount; i++)
+                    int pinBatchIndex = actorConstraints.batches.IndexOf(pinBatch);
+                    if (pinBatchIndex >= 0 && pinBatchIndex < actor.solverBatchOffsets[(int)Oni.ConstraintType.Pin].Count)
                     {
-                        if (-solverBatch.lambdas[(offset + i) * 4 + 3] / sqrTime > pinBatch.breakThresholds[i])
+                        int offset = actor.solverBatchOffsets[(int)Oni.ConstraintType.Pin][pinBatchIndex];
+                        var solverBatch = solverConstraints.batches[pinBatchIndex];
+
+                        float sqrTime = stepTime * stepTime;
+                        for (int i = 0; i < pinBatch.activeConstraintCount; i++)
                         {
-                            pinBatch.DeactivateConstraint(i);
-                            torn = true;
+                            // In case the handle has been created/destroyed.
+                            if (pinBatch.pinBodies[i] != attachedCollider.Handle)
+                            {
+                                pinBatch.pinBodies[i] = attachedCollider.Handle;
+                                dirty = true;
+                            }
+
+                            // in case the constraint has been broken:
+                            if (-solverBatch.lambdas[(offset + i) * 4 + 3] / sqrTime > pinBatch.breakThresholds[i])
+                            {
+                                pinBatch.DeactivateConstraint(i);
+                                dirty = true;
+                            }
                         }
                     }
                 }
 
                 // constraints are recreated at the start of a step.
-                if (torn)
+                if (dirty)
                     m_Actor.SetConstraintsDirty(Oni.ConstraintType.Pin);
             }
         }

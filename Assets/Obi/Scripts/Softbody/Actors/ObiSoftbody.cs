@@ -1,5 +1,4 @@
 using UnityEngine;
-using System.Collections;
 
 namespace Obi
 {
@@ -20,6 +19,21 @@ namespace Obi
         [SerializeField] protected float _plasticYield = 0;
         [SerializeField] protected float _plasticCreep = 0;
         [SerializeField] protected float _plasticRecovery = 0;
+
+        /// <summary>
+        /// Whether to use simplices (triangles, edges) for contact generation.
+        /// </summary>
+        public override bool surfaceCollisions
+        {
+            get
+            {
+                return false;
+            }
+            set
+            {
+                m_SurfaceCollisions = false;
+            }
+        }
 
         /// <summary>  
         /// Whether this actor's shape matching constraints are enabled.
@@ -150,6 +164,7 @@ namespace Obi
         {
             SetConstraintsDirty(Oni.ConstraintType.ShapeMatching);
             SetSelfCollisions(m_SelfCollisions);
+            UpdateCollisionMaterials();
         }
 
         public override void LoadBlueprint(ObiSolver solver)
@@ -219,7 +234,7 @@ namespace Obi
 
                 var sc = m_SoftbodyBlueprint.GetConstraintsByType(Oni.ConstraintType.ShapeMatching) as ObiConstraints<ObiShapeMatchingConstraintsBatch>;
 
-                // Get the particle whose center is closest to the actor's center (in mesh space)
+                // Get the particle whose center is closest to the actor's center (in blueprint space)
                 float minDistance = float.MaxValue;
                 for (int j = 0; j < sc.GetBatchCount(); ++j)
                 {

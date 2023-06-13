@@ -18,7 +18,12 @@ namespace Obi
         /// <summary>
         /// two floats per constraint: max bending and compliance.
         /// </summary>
-        [HideInInspector] public ObiNativeVector2List bendingStiffnesses = new ObiNativeVector2List();    
+        [HideInInspector] public ObiNativeVector2List bendingStiffnesses = new ObiNativeVector2List();
+
+        /// <summary>
+        /// two floats per constraint: plastic yield and creep.
+        /// </summary>
+        [HideInInspector] public ObiNativeVector2List plasticity = new ObiNativeVector2List();
 
         public override Oni.ConstraintType constraintType
         {
@@ -47,10 +52,12 @@ namespace Obi
                 particleIndices.ResizeUninitialized((m_ActiveConstraintCount + batch.activeConstraintCount) * 3);
                 restBends.ResizeUninitialized(m_ActiveConstraintCount + batch.activeConstraintCount);
                 bendingStiffnesses.ResizeUninitialized(m_ActiveConstraintCount + batch.activeConstraintCount);
+                plasticity.ResizeUninitialized(m_ActiveConstraintCount + batch.activeConstraintCount);
                 lambdas.ResizeInitialized(m_ActiveConstraintCount + batch.activeConstraintCount);
 
                 restBends.CopyFrom(batch.restBends, 0, m_ActiveConstraintCount, batch.activeConstraintCount);
                 bendingStiffnesses.CopyReplicate(new Vector2(user.maxBending, user.bendCompliance), m_ActiveConstraintCount, batch.activeConstraintCount);
+                plasticity.CopyReplicate(new Vector2(user.plasticYield, user.plasticCreep), m_ActiveConstraintCount, batch.activeConstraintCount);
 
                 for (int i = 0; i < batch.activeConstraintCount * 3; ++i)
                     particleIndices[m_ActiveConstraintCount * 3 + i] = actor.solverIndices[batch.particleIndices[i]];
@@ -68,6 +75,7 @@ namespace Obi
             particleIndices.Add(indices[2]);
             restBends.Add(restBend);
             bendingStiffnesses.Add(Vector2.zero);
+            plasticity.Add(Vector2.zero);
         }
 
         public override void Clear()
@@ -75,6 +83,7 @@ namespace Obi
             base.Clear();
             restBends.Clear();
             bendingStiffnesses.Clear();
+            plasticity.Clear();
         }
 
         public override void GetParticlesInvolved(int index, List<int> particles)
@@ -91,6 +100,7 @@ namespace Obi
             particleIndices.Swap(sourceIndex * 3 + 2, destIndex * 3 + 2);
             restBends.Swap(sourceIndex, destIndex);
             bendingStiffnesses.Swap(sourceIndex, destIndex);
+            plasticity.Swap(sourceIndex, destIndex);
         }
 
         public override void AddToSolver(ObiSolver solver)
@@ -99,7 +109,7 @@ namespace Obi
             m_BatchImpl = solver.implementation.CreateConstraintsBatch(constraintType) as IBendConstraintsBatchImpl;
 
             if (m_BatchImpl != null)
-                m_BatchImpl.SetBendConstraints(particleIndices, restBends, bendingStiffnesses, lambdas, m_ActiveConstraintCount);
+                m_BatchImpl.SetBendConstraints(particleIndices, restBends, bendingStiffnesses, plasticity, lambdas, m_ActiveConstraintCount);
             
         }
 

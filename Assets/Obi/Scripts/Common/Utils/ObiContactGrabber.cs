@@ -45,7 +45,7 @@ public class ObiContactGrabber : MonoBehaviour
         }
     }
 
-    private Dictionary<ObiSolver,ObiSolver.ObiCollisionEventArgs> collisionEvents = new Dictionary<ObiSolver, ObiSolver.ObiCollisionEventArgs>();                                 /**< store the current collision event*/
+    private Dictionary<ObiSolver, ObiSolver.ObiCollisionEventArgs> collisionEvents = new Dictionary<ObiSolver, ObiSolver.ObiCollisionEventArgs>();                                 /**< store the current collision event*/
     private ObiCollider localCollider;                                                           /**< the collider on this gameObject.*/
     private HashSet<GrabbedParticle> grabbedParticles = new HashSet<GrabbedParticle>();          /**< set to store all currently grabbed particles.*/
     private HashSet<ObiActor> grabbedActors = new HashSet<ObiActor>();                           /**< set of softbodies grabbed during this step.*/
@@ -58,7 +58,7 @@ public class ObiContactGrabber : MonoBehaviour
     private void OnEnable()
     {
         if (solvers != null)
-            foreach(ObiSolver solver in solvers)
+            foreach (ObiSolver solver in solvers)
                 solver.OnCollision += Solver_OnCollision;
     }
 
@@ -130,14 +130,15 @@ public class ObiContactGrabber : MonoBehaviour
                         // this one is an actual collision:
                         if (contact.distance < 0.01f)
                         {
-                            var contactCollider = world.colliderHandles[contact.other].owner;
+                            var contactCollider = world.colliderHandles[contact.bodyB].owner;
+                            int particleIndex = solver.simplices[contact.bodyA];
 
                             // if the current contact references our collider, proceed to grab the particle.
                             if (contactCollider == localCollider)
                             {
                                 // try to grab the particle, if not already grabbed.
-                                if (GrabParticle(solver,contact.particle))
-                                    grabbedActors.Add(solver.particleToActor[contact.particle].actor);
+                                if (GrabParticle(solver, particleIndex))
+                                    grabbedActors.Add(solver.particleToActor[particleIndex].actor);
                             }
 
                         }

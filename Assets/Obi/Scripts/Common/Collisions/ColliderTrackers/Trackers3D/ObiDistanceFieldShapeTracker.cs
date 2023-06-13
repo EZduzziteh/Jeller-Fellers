@@ -37,6 +37,14 @@ namespace Obi{
             var world = ObiColliderWorld.GetInstance();
             int index = source.Handle.index;
 
+            // decrease reference count of current handle if the df data it points to is different
+            // than the df used by the collider:
+            if (handle != null && handle.owner != distanceField)
+            {
+                if (handle.Dereference())
+                    world.DestroyDistanceField(handle);
+            }
+
             if (handle == null || !handle.isValid)
             {
                 handle = world.GetOrCreateDistanceField(distanceField);
@@ -46,7 +54,7 @@ namespace Obi{
             // update collider:
             var shape = world.colliderShapes[index];
             shape.type = ColliderShape.ShapeType.SignedDistanceField;
-            shape.phase = source.Phase;
+            shape.filter = source.Filter;
             shape.flags = trigger ? 1 : 0;
             shape.rigidbodyIndex = source.Rigidbody != null ? source.Rigidbody.handle.index : -1;
             shape.materialIndex = source.CollisionMaterial != null ? source.CollisionMaterial.handle.index : -1;

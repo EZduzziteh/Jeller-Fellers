@@ -1,49 +1,61 @@
 ﻿using UnityEditor;
 using UnityEngine;
 using UnityEditor.SceneManagement;
-using System;
 using System.Collections;
-using System.Collections.Generic;
 
 namespace Obi{
 	
-	/**
-	 * Custom inspector for ObiRope components.
-	 * Allows particle selection and constraint edition. 
-	 * 
-	 * Selection:
-	 * 
-	 * - To select a particle, left-click on it. 
-	 * - You can select multiple particles by holding shift while clicking.
-	 * - To deselect all particles, click anywhere on the object except a particle.
-	 * 
-	 * Constraints:
-	 * 
-	 * - To edit particle constraints, select the particles you wish to edit.
-	 * - Constraints affecting any of the selected particles will appear in the inspector.
-	 * - To add a new pin constraint to the selected particle(s), click on "Add Pin Constraint".
-	 * 
-	 */
 	[CustomEditor(typeof(ObiSoftbodySkinner)), CanEditMultipleObjects] 
 	public class ObiSoftbodySkinnerEditor : Editor
 	{
 		
-		ObiSoftbodySkinner skinner;
+		public ObiSoftbodySkinner skinner;
 		protected IEnumerator routine;
-		
-		public void OnEnable(){
-			skinner = (ObiSoftbodySkinner)target;
-		}
-		
-		public void OnDisable(){
-			EditorUtility.ClearProgressBar();
-		}
 
-		private void BakeMesh(){
+        private ObiRaycastBrush paintBrush;
+        private ObiSoftbodyInfluenceChannel currentProperty = null;
+        private Material paintMaterial;
+
+        private bool editInfluences = false;
+		
+		public void OnEnable()
+        {
+			skinner = (ObiSoftbodySkinner)target;
+
+            paintBrush = new ObiRaycastBrush(null,
+                                                         () =>
+                                                         {
+                                                             // As RecordObject diffs with the end of the current frame,
+                                                             // and this is a multi-frame operation, we need to use RegisterCompleteObjectUndo instead.
+                                                             Undo.RegisterCompleteObjectUndo(target, "Paint influences");
+                                                         },
+                                                         () =>
+                                                         {
+                                                             SceneView.RepaintAll();
+                                                         },
+                                                         () =>
+                                                         {
+                                                             EditorUtility.SetDirty(target);
+                                                         });
+
+            currentProperty = new ObiSoftbodyInfluenceChannel(this);
+
+            if (paintMaterial == null)
+                paintMaterial = Resources.Load<Material>("PropertyGradientMaterial");
+        }
+		
+		public void OnDisable()
+        {
+			EditorUtility.ClearProgressBar();
+        }
+
+		private void BakeMesh()
+        {
 
 			SkinnedMeshRenderer skin = skinner.GetComponent<SkinnedMeshRenderer>();
 
-			if (skin != null && skin.sharedMesh != null){
+			if (skin != null && skin.sharedMesh != null)
+            {
 
 				Mesh baked = new Mesh();
 				skin.BakeMesh(baked);
@@ -52,33 +64,79 @@ namespace Obi{
 			}
 		}
 
-		public override void OnInspectorGUI() {
+        protected void NonReadableMeshWarning(Mesh mesh)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            Texture2D icon = EditorGUIUtility.Load("icons/console.erroricon.png") as Texture2D;
+            EditorGUILayout.LabelField(new GUIContent("The renderer mesh is not readable. Read/Write must be enabled in the mesh import settings.", icon), EditorStyles.wordWrappedMiniLabel);
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Fix now", GUILayout.MaxWidth(100), GUILayout.MinHeight(32)))
+            {
+                string assetPath = AssetDatabase.GetAssetPath(mesh);
+                ModelImporter modelImporter = AssetImporter.GetAtPath(assetPath) as ModelImporter;
+                if (modelImporter != null)
+                {
+                    modelImporter.isReadable = true;
+                }
+                modelImporter.SaveAndReimport();
+            }
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
+        protected bool ValidateRendererMesh()
+        {
+            SkinnedMeshRenderer skin = skinner.GetComponent<SkinnedMeshRenderer>();
+
+            if (skin != null && skin.sharedMesh != null)
+            {
+                if (!skin.sharedMesh.isReadable)
+                {
+                    NonReadableMeshWarning(skin.sharedMesh);
+                    return false;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        public override void OnInspectorGUI() {
 			
 			serializedObject.Update();		
 
-			//EditorGUILayout.LabelField("Status: "+ (body.Initialized ? "Initialized":"Not initialized"));
+			GUI.enabled = skinner.Source != null && ValidateRendererMesh();
+            if (GUILayout.Button("Bind skin")){
 
-			GUI.enabled = skinner.Source != null;
-			if (GUILayout.Button("Bind skin")){
-				//if (!body.Initialized){
 					EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
 					CoroutineJob job = new CoroutineJob();
 					routine = job.Start(skinner.BindSkin());
 					EditorCoroutine.ShowCoroutineProgressBar("Binding to particles...",ref routine);
 					EditorGUIUtility.ExitGUI();
-				/*}else{
-					if (EditorUtility.DisplayDialog("Actor initialization","Are you sure you want to re-initialize this actor?","Ok","Cancel")){
-						EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-						CoroutineJob job = new CoroutineJob();
-						routine = job.Start(body.GeneratePhysicRepresentationForMesh());
-						EditorCoroutine.ShowCoroutineProgressBar("Generating physical representation...",ref routine);
-						EditorGUIUtility.ExitGUI();
-					}
-				}*/
+
 			}
 			if (GUILayout.Button("Bake Mesh")){
 				BakeMesh();
 			}
+
+            EditorGUI.BeginChangeCheck();
+            editInfluences = GUILayout.Toggle(editInfluences,new GUIContent("Paint Influence"),"Button");
+            if (EditorGUI.EndChangeCheck())
+                SceneView.RepaintAll();
+
+            if (editInfluences && paintBrush != null)
+            {
+                currentProperty.BrushModes(paintBrush);
+
+                if (paintBrush.brushMode.needsInputValue)
+                    currentProperty.PropertyField();
+
+                paintBrush.radius = EditorGUILayout.Slider("Brush size", paintBrush.radius, 0.0001f, 0.5f);
+                paintBrush.innerRadius = EditorGUILayout.Slider("Brush inner size", paintBrush.innerRadius, 0, 1);
+                paintBrush.opacity = EditorGUILayout.Slider("Brush opacity", paintBrush.opacity, 0, 1);
+            }
+
 			GUI.enabled = true;
 
 			if (skinner.Source == null){
@@ -93,8 +151,72 @@ namespace Obi{
 			if (GUI.changed){
 				serializedObject.ApplyModifiedProperties();
 			}
-			
 		}
+
+        public void OnSceneGUI()
+        {
+            if (editInfluences)
+            {
+                skinner.InitializeInfluences();
+
+                SkinnedMeshRenderer skin = skinner.GetComponent<SkinnedMeshRenderer>();
+
+                if (skin != null && skin.sharedMesh != null)
+                {
+                    var bakedMesh = new Mesh();
+                    skin.BakeMesh(bakedMesh);
+
+                    if (Event.current.type == EventType.Repaint)
+                        DrawMesh(bakedMesh);
+
+                    if (Camera.current != null)
+                    {
+                        paintBrush.raycastTarget = bakedMesh; 
+                        paintBrush.raycastTransform = skin.transform.localToWorldMatrix;
+
+                        // TODO: do better.
+                        var v = bakedMesh.vertices;
+                        Vector3[] worldSpace = new Vector3[v.Length];
+                        for (int i = 0; i < worldSpace.Length; ++i)
+                            worldSpace[i] = paintBrush.raycastTransform.MultiplyPoint3x4(v[i]);
+
+                        paintBrush.DoBrush(worldSpace);
+                    }
+
+                    DestroyImmediate(bakedMesh);
+                }
+
+            }
+        }
+
+        private void DrawMesh(Mesh mesh)
+        {
+            if (paintMaterial.SetPass(0))
+            {
+                Color[] colors = new Color[mesh.vertexCount];
+                for (int i = 0; i < colors.Length; i++)
+                {
+                    colors[i] = new Color(skinner.m_softbodyInfluences[i], skinner.m_softbodyInfluences[i], skinner.m_softbodyInfluences[i]);
+                }
+
+                mesh.colors = colors;
+                Graphics.DrawMeshNow(mesh, paintBrush.raycastTransform);
+
+                if (paintMaterial.SetPass(1))
+                {
+                    Color wireColor = ObiEditorSettings.GetOrCreateSettings().brushWireframeColor;
+                    for (int i = 0; i < paintBrush.weights.Length; i++)
+                    {
+                        colors[i] = wireColor * paintBrush.weights[i];
+                    }
+
+                    mesh.colors = colors;
+                    GL.wireframe = true;
+                    Graphics.DrawMeshNow(mesh, paintBrush.raycastTransform);
+                    GL.wireframe = false;
+                }
+            }
+        }
 	}
 }
 

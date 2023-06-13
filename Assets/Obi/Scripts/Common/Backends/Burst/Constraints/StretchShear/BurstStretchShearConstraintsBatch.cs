@@ -33,7 +33,7 @@ namespace Obi
             m_ConstraintCount = count;
         }
 
-        public override JobHandle Evaluate(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps)
         {
             var projectConstraints = new StretchShearConstraintsBatchJob()
             {
@@ -54,13 +54,13 @@ namespace Obi
                 counts = solverImplementation.positionConstraintCounts,
                 orientationCounts = solverImplementation.orientationConstraintCounts,
 
-                deltaTimeSqr = deltaTime * deltaTime
+                deltaTimeSqr = substepTime * substepTime
             };
 
             return projectConstraints.Schedule(m_ConstraintCount, 32, inputDeps);
         }
 
-        public override JobHandle Apply(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Apply(JobHandle inputDeps, float substepTime)
         {
             var parameters = solverAbstraction.GetConstraintParameters(m_ConstraintType);
 

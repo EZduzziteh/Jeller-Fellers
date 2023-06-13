@@ -9,7 +9,7 @@ Properties {
 		Pass { 
 
 			Name "ParticleFwdBase"
-			Tags {"Queue"="Geometry" "IgnoreProjector"="True" "RenderType"="Opaque"}
+			Tags {"Queue"="Geometry" "IgnoreProjector"="True" "RenderType"="Opaque" "LightMode" = "ForwardBase"}
 			Blend SrcAlpha OneMinusSrcAlpha  
 			
 			CGPROGRAM

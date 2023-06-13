@@ -30,13 +30,13 @@ namespace Obi
 
         private static int CompareByRef(ref Oni.Contact a, ref Oni.Contact b, ObiSolver solver)
         {
-            if (a.other == b.other)
+            if (a.bodyB == b.bodyB)
             {
-                int hashA = solver.particleToActor[a.particle].actor.GetInstanceID();
-                int hashB = solver.particleToActor[b.particle].actor.GetInstanceID();
+                int hashA = solver.particleToActor[a.bodyA].actor.GetInstanceID();
+                int hashB = solver.particleToActor[b.bodyA].actor.GetInstanceID();
                 return hashA.CompareTo(hashB);
             }
-            return a.other.CompareTo(b.other);
+            return a.bodyB.CompareTo(b.bodyB);
         }
 
         [System.Serializable]
@@ -70,7 +70,7 @@ namespace Obi
 
             // simply iterate trough all contacts,
             // moving the ones above the threshold to the end of the array:
-            for (int i = count -1 ; i >= 0; --i)
+            for (int i = count - 1; i >= 0; --i)
                 if (data[i].distance > distanceThreshold)
                     ObiUtils.Swap(ref data[i], ref data[--filteredCount]);
 
@@ -143,7 +143,7 @@ namespace Obi
 
             // store current contact list/count for next frame.
             // could get better performance by double buffering instead of copying:
-            if (filteredCount > prevData.Length) 
+            if (filteredCount > prevData.Length)
                 Array.Resize(ref prevData, filteredCount);
             Array.Copy(args.contacts.Data, prevData, filteredCount);
 

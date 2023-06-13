@@ -1,6 +1,131 @@
 # Change Log
 All notable changes to “Obi - Advanced softbodies for Unity” will be documented in this file.
 
+## [6.5.2]
+
+### Changed
+- Slightly improved overall performance by only updating collision material references during OnValidate()
+- Exposed solver.activeParticles and solver.colors as a ObiNativeIntList instead of int[], which allows to use them directly in jobs.
+- Updated for compatibility with newest Collections package.
+
+## [6.5.1]
+
+### Added
+- Support for holes in terrain colliders.
+
+### Fixed
+- Out of bounds access exception when using skeletons for FVBS generation. 
+
+## [6.5]
+
+### Added
+- Improved constraint coloring, which results in much faster blueprint generation.
+- Improved anisotropy robustness when using very small meshes to generate a blueprint.
+
+### Fixed
+- Error message when using "vertex" mode for blueprint surface generation in certain meshes.
+- Memory leak when using collision constraints in the Burst backend.
+- Performance drop when using collision constraints in Burst >1.7
+- Incorrect lighting on particles in the blueprint editor, when opening the editor without having previously opened any scene.
+- Bug that broke skinning when the amount of bone influences affecting a vertex was larger than 255.
+
+## [6.4]
+
+### Added
+- Support for configurable enter play mode (domain and scene reload disabling).
+- Support for in-editor hot reloading.
+- Paint brush mirroring in x,y,z axis for blueprint editor.
+- New "Copy" paint brush mode in the blueprint editor allows you to selectively copy values between particle property channels.
+
+### Changed
+- Introduced a job handle pool to avoid runtime allocation of handles by both Burst and Oni backends.
+- Constraint padding array in Burst solver has been turned into a member variable instead of allocating anew it every frame.
+- Collision and friction batches are pooled instead of allocated every frame.
+
+### Fixed
+- IndexOutOfRangeException when enabling mesh rendering in a softbody blueprint using voxel surface generation.
+- InvalidOperationException when performing certain spatial queries with jobs debugger enabled in the Burst backend.
+- Particle render mode in blueprint editor wasn't updated every frame under specific circumstances.
+
+## [6.3]
+
+### Added
+- Redone softbody blueprints generation from scratch: surface and volume particle generation can be combined, with automatic cluster placement.
+- Full-body volumetric softbodies: a character's skeleton can be used to drive softbody particle movement.
+- ObiSoftbodySkinner now supports up to 255 bones per vertex, and supports per-vertex blending between the original skinning and particle skinning.
+- ObiSoftbodySkinner can be enabled/disabled.
+- Built-in support for applying solver gravity in world-space.
+
+### Fixed
+- Bug in attachments: prefab modifications were not being applied to the component.
+- Slight reduction in solver memory allocation.
+- Object disposed exception when using contact callbacks with a non-visible solver.
+
+### Removed
+- ObiSoftbodyVolumeBlueprint has been removed.
+
+## [6.2]
+
+#IMPORTANT: If updating from an older version, you’ll need to readjust collision filtering in your scenes.
+Phase-based collision filtering has been replaced by mask/categroy based system.
+
+### Added
+- New spatial query API, that allows to perform efficient distance, overlap and raycast queries.
+
+### Changed
+- Collision phase filtering has been replaced by a category/mask system. If you upgrade existing projects to Obi 6.2, you will have to set up categories and masks appropiately.
+
+
+## [6.1]
+
+### Added
+- Exposed per-constraint best linear transform matrix and plastic deformation matrix in shape matching constraints (linearTransform and plasticDeformation arrays in each batch).
+- New DeformationGradient sample scene, that maps cluster deformation to vertex colors.
+
+### Changed
+- Decreased minimum error in distance fields to 1e-07
+
+### Fixed
+- Bug in Oni backend: collision stickiness resulted in rapid particle separation from the collision surface.
+- Bug that caused NaN velocity assignments to rigidbodies after removing all actors from a solver.
+
+## [6.0.2]
+
+### Fixed
+- Performance issues when enabling particle visualization in the blueprint editor while having more than one scene view open.
+- Sometimes the particle visualization in the blueprint editor wasn't updated after clicking Generate(), requiring to deactivate/reactivate visualization. This is fixed now.
+
+### Added
+- The ObiSoftbodySkinner component now checks if the renderer's mesh is readable, if not the case it asks to fix it for you automatically.
+
+## [6.0.1]
+
+### Fixed
+- Bug in Burst backend, resulting in InvalidOperationException when enabling Burst safety checks.
+- Bug in ObiSolver that caused particleToActor array entries to be null.
+
+## [6.0]
+
+### Added
+- Predictive variable-step constraint solving that makes syncing Unity's physics no longer necessary when using substeps.
+- Amount of CCD is now adjustable per-solver.
+- Collision margin is now adjustable per-solver.
+- Bend and bend/twist constraints now support plasticity.
+- One-sided collision detection between particles. Particles with one-sided collision detection will always project penetrating particles to the side defined by their associated normal.
+
+### Fixed
+- Bug in dynamic particle attachments that would case colliders parented under a solver to lose their attachments upon enabling/reenabling a solver.
+
+### Changed
+- Contacts "particle" and "other" have been renamed to "bodyA" and "bodyB". bodyB might be a simplex or collider index, depending on the contact type.To access
+particle indices from simplex indices, use the solver.simplices array.
+
+
+## [5.6.2]
+
+### Fixed
+- Missed collisions using certain meshes for MeshColliders, due to a bug in bounding interval hierarchy generation.
+
 ## [5.6.1]
 
 ### Fixed

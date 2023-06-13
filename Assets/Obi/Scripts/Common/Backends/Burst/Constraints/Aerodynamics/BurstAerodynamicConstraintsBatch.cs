@@ -26,12 +26,12 @@ namespace Obi
             m_ConstraintCount = count;
         }
 
-        public override JobHandle Initialize(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Initialize(JobHandle inputDeps, float substepTime)
         {
             return inputDeps;
         }
 
-        public override JobHandle Evaluate(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps)
         {
             var projectConstraints = new AerodynamicConstraintsBatchJob()
             {
@@ -42,13 +42,13 @@ namespace Obi
                 normals = solverImplementation.normals,
                 wind = solverImplementation.wind,
                 invMasses = solverImplementation.invMasses,
-                deltaTime = deltaTime
+                deltaTime = substepTime
             };
 
             return projectConstraints.Schedule(m_ConstraintCount, 32, inputDeps);
         }
 
-        public override JobHandle Apply(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Apply(JobHandle inputDeps, float substepTime)
         {
             return inputDeps;
         }

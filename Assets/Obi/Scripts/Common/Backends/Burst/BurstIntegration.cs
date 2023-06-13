@@ -1,7 +1,6 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
-using UnityEngine;
+
 using Unity.Mathematics;
-using System.Collections;
 using System.Runtime.CompilerServices;
 
 namespace Obi
@@ -21,26 +20,26 @@ namespace Obi
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static quaternion AngularVelocityToSpinQuaternion(quaternion rotation, float4 angularVelocity)
+        public static quaternion AngularVelocityToSpinQuaternion(quaternion rotation, float4 angularVelocity, float dt)
         {
             var delta = new quaternion(angularVelocity.x,
                                        angularVelocity.y,
                                        angularVelocity.z, 0);
 
-            return new quaternion(0.5f * math.mul(delta,rotation).value); 
+            return new quaternion(0.5f * math.mul(delta,rotation).value * dt); 
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static quaternion IntegrateAngular(quaternion rotation, float4 angularVelocity, float dt)
         {
-            rotation.value += AngularVelocityToSpinQuaternion(rotation,angularVelocity).value * dt;
+            rotation.value += AngularVelocityToSpinQuaternion(rotation,angularVelocity, dt).value;
             return math.normalize(rotation);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4 DifferentiateAngular(quaternion rotation, quaternion prevRotation, float dt)
         {
-            return new float4((math.mul(rotation, math.inverse(prevRotation)).value * 2.0f/dt).xyz, 0);
+            return new float4((math.mul(rotation, math.inverse(prevRotation)).value * 2.0f / dt).xyz, 0);
         }
     }
 }

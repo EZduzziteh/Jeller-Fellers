@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct ApplyInertialForcesJob : IJobParallelFor
     {
-		[ReadOnly] public NativeList<int> activeParticles;
+		[ReadOnly] public NativeArray<int> activeParticles;
         [ReadOnly] public NativeArray<float4> positions;
 		[ReadOnly] public NativeArray<float> invMasses;
 

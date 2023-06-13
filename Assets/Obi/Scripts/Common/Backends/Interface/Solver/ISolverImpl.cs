@@ -16,8 +16,7 @@ namespace Obi
 
         #region Particles
         void ParticleCountChanged(ObiSolver solver);
-        void ParticleCapacityChanged(ObiSolver solver);
-        void SetActiveParticles(int[] indices, int num);
+        void SetActiveParticles(ObiNativeIntList indices);
         void InterpolateDiffuseProperties(ObiNativeVector4List properties, ObiNativeVector4List diffusePositions, ObiNativeVector4List diffuseProperties, ObiNativeIntList neighbourCount, int diffuseCount);
         #endregion
 
@@ -26,19 +25,6 @@ namespace Obi
         #endregion
 
         #region Constraints
-        /*IConstraintsImpl<IDistanceConstraintsBatchImpl> CreateDistanceConstraints();
-        IConstraintsImpl<IBendConstraintsBatchImpl> CreateBendConstraints();
-        IConstraintsImpl<IVolumeConstraintsBatchImpl> CreateVolumeConstraints();
-        IConstraintsImpl<IAerodynamicConstraintsBatchImpl> CreateAerodynamicConstraints();
-        IConstraintsImpl<IStretchShearConstraintsBatchImpl> CreateStretchShearConstraints();
-        IConstraintsImpl<IBendTwistConstraintsBatchImpl> CreateBendTwistConstraints();
-        IConstraintsImpl<IChainConstraintsBatchImpl> CreateChainConstraints();
-        IConstraintsImpl<ITetherConstraintsBatchImpl> CreateTetherConstraints();
-        IConstraintsImpl<IStitchConstraintsBatchImpl> CreateStitchConstraints();
-        IConstraintsImpl<ISkinConstraintsBatchImpl> CreateSkinConstraints();
-        IConstraintsImpl<IShapeMatchingConstraintsBatchImpl> CreateShapeMatchingConstraints();
-        IConstraintsImpl<IPinConstraintsBatchImpl> CreatePinConstraints();*/
-
         IConstraintsBatchImpl CreateConstraintsBatch(Oni.ConstraintType type);
         void DestroyConstraintsBatch(IConstraintsBatchImpl batch);
         int GetConstraintCount(Oni.ConstraintType type);
@@ -49,14 +35,16 @@ namespace Obi
 
         #region Update
         IObiJobHandle CollisionDetection(float stepTime);
-        IObiJobHandle Substep(float substepTime);
+        IObiJobHandle Substep(float stepTime, float substepTime, int substeps);
         void ApplyInterpolation(ObiNativeVector4List startPositions, ObiNativeQuaternionList startOrientations, float stepTime, float unsimulatedTime);
         #endregion
 
-        #region Deformable triangles
+        #region Simplices
         int GetDeformableTriangleCount();
         void SetDeformableTriangles(int[] indices, int num, int destOffset);
         int RemoveDeformableTriangles(int num, int sourceOffset);
+
+        void SetSimplices(ObiNativeIntList simplices, SimplexCounts counts);
         #endregion
 
         #region Utils
@@ -65,6 +53,8 @@ namespace Obi
         void ResetForces();
         int GetParticleGridSize();
         void GetParticleGrid(ObiNativeAabbList cells);
+        void SpatialQuery(ObiNativeQueryShapeList shapes, ObiNativeAffineTransformList transforms, ObiNativeQueryResultList results);
+        void ReleaseJobHandles();
         #endregion
     }
 }

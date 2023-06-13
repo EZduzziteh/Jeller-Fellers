@@ -11,7 +11,10 @@ namespace Obi
         private IntPtr m_OniSolver;
 
         // Per-type constraints array:
-        IOniConstraintsImpl[] constraints;
+        private IOniConstraintsImpl[] constraints;
+
+        // Pool job handles to avoid runtime alloc:
+        private JobHandlePool<OniJobHandle> jobHandlePool;
 
         public IntPtr oniSolver
         {
@@ -21,6 +24,8 @@ namespace Obi
         public OniSolverImpl(IntPtr solver)
         {
             m_OniSolver = solver;
+
+            jobHandlePool = new JobHandlePool<OniJobHandle>(4);
 
             constraints = new IOniConstraintsImpl[Oni.ConstraintTypeCount];
             constraints[(int)Oni.ConstraintType.Tether] = new OniTetherConstraintsImpl(this);
@@ -71,6 +76,11 @@ namespace Obi
             return Oni.RemoveDeformableTriangles(m_OniSolver, num, sourceOffset);
         }
 
+        public void SetSimplices(ObiNativeIntList simplices, SimplexCounts counts)
+        {
+            Oni.SetSimplices(m_OniSolver, simplices.AsNativeArray<int>().ToArray(), counts.pointCount, counts.edgeCount, counts.triangleCount);
+        }
+
         public void ParticleCountChanged(ObiSolver solver)
         {
             Oni.SetParticlePositions(m_OniSolver, solver.positions.GetIntPtr());
@@ -86,6 +96,7 @@ namespace Obi
             Oni.SetParticlePrincipalRadii(m_OniSolver, solver.principalRadii.GetIntPtr());
             Oni.SetParticleCollisionMaterials(m_OniSolver, solver.collisionMaterials.GetIntPtr());
             Oni.SetParticlePhases(m_OniSolver, solver.phases.GetIntPtr());
+            Oni.SetParticleFilters(m_OniSolver, solver.filters.GetIntPtr());
             Oni.SetRenderableParticlePositions(m_OniSolver, solver.renderablePositions.GetIntPtr());
             Oni.SetRenderableParticleOrientations(m_OniSolver, solver.renderableOrientations.GetIntPtr());
             Oni.SetParticleAnisotropies(m_OniSolver, solver.anisotropies.GetIntPtr());
@@ -109,11 +120,7 @@ namespace Obi
             Oni.SetParticleOrientationConstraintCounts(m_OniSolver, solver.orientationConstraintCounts.GetIntPtr());
             Oni.SetParticleNormals(m_OniSolver, solver.normals.GetIntPtr());
             Oni.SetParticleInverseInertiaTensors(m_OniSolver, solver.invInertiaTensors.GetIntPtr());
-        }
 
-
-        public void ParticleCapacityChanged(ObiSolver solver)
-        {
             Oni.SetCapacity(m_OniSolver, solver.positions.capacity);
         }
 
@@ -123,9 +130,9 @@ namespace Obi
             Oni.SetRigidbodyAngularDeltas(m_OniSolver, solver.rigidbodyAngularDeltas.GetIntPtr());
         }
 
-        public void SetActiveParticles(int[] indices, int num)
+        public void SetActiveParticles(ObiNativeIntList indices)
         {
-            Oni.SetActiveParticles(oniSolver, indices, num);
+            Oni.SetActiveParticles(oniSolver, indices.AsNativeArray<int>().ToArray(), indices.count);
         }
 
         public void ResetForces()
@@ -177,12 +184,12 @@ namespace Obi
         public IObiJobHandle CollisionDetection(float stepTime)
         {
             Oni.RecalculateInertiaTensors(oniSolver);
-            return new OniJobHandle(Oni.CollisionDetection(oniSolver, stepTime));
+            return jobHandlePool.Borrow().SetPointer(Oni.CollisionDetection(oniSolver, stepTime));
         }
 
-        public IObiJobHandle Substep(float substepTime)
+        public IObiJobHandle Substep(float stepTime, float substepTime, int substeps)
         {
-            return new OniJobHandle(Oni.Step(oniSolver, substepTime));
+            return jobHandlePool.Borrow().SetPointer(Oni.Step(oniSolver, stepTime, substepTime, substeps));
         }
 
         public void ApplyInterpolation(ObiNativeVector4List startPositions, ObiNativeQuaternionList startOrientations, float stepTime, float unsimulatedTime)
@@ -203,7 +210,17 @@ namespace Obi
         {
             //Oni.GetParticleGrid(oniSolver, cells.GetIntPtr());
         }
+        public void SpatialQuery(ObiNativeQueryShapeList shapes, ObiNativeAffineTransformList transforms, ObiNativeQueryResultList results)
+        {
+            int count = Oni.SpatialQuery(oniSolver, shapes.GetIntPtr(), transforms.GetIntPtr(), shapes.count);
 
+            results.ResizeUninitialized(count);
+            Oni.GetQueryResults(oniSolver, results.GetIntPtr(), count);
+        }
+        public void ReleaseJobHandles()
+        {
+            jobHandlePool.ReleaseAll();
+        }
     }
 }
 #endif

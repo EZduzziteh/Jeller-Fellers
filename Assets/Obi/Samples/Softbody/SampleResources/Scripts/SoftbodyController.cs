@@ -58,11 +58,10 @@ public class SoftbodyController : MonoBehaviour
 
             // apply ground/air movement:
             float effectiveAcceleration = acceleration;
-
             if (!onGround)
                 effectiveAcceleration *= airControl;
-
-            softbody.AddForce(direction.normalized * effectiveAcceleration, ForceMode.Acceleration);
+            //softbody.AddTorque(direction.normalized * effectiveAcceleration * Time.deltaTime, ForceMode.Acceleration);
+            softbody.AddForce(direction.normalized * effectiveAcceleration*Time.deltaTime, ForceMode.Acceleration);
 
             // jump:
             if (onGround && Input.GetKeyDown(KeyCode.Space))
@@ -83,7 +82,7 @@ public class SoftbodyController : MonoBehaviour
             // look for actual contacts only:
             if (contact.distance > 0.01)
             {
-                var col = world.colliderHandles[contact.other].owner;
+                var col = world.colliderHandles[contact.bodyB].owner;
                 if (col != null)
                 {
                     onGround = true;

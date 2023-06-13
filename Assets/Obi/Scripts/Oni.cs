@@ -33,15 +33,6 @@ public static class Oni
         Friction = 16
     };
 
-    [Flags]
-    public enum ParticleFlags
-    {
-        GroupMask = 0x00ffffff,
-        SelfCollide = 1 << 24,
-        Fluid = 1 << 25,
-        OneSided = 1 << 26
-    }
-
     public enum ShapeType
     {
         Sphere = 0,
@@ -107,25 +98,41 @@ public static class Oni
         [Tooltip("Same as Rigidbody.interpolation. Set to INTERPOLATE for cloth that is applied on a main character or closely followed by a camera. NONE for everything else.")]
         public Interpolation interpolation;
 
+        [Tooltip("Simulation gravity expressed in local space.")]
         public Vector3 gravity;
 
         [Tooltip("Percentage of velocity lost per second, between 0% (0) and 100% (1).")]
         [Range(0, 1)]
         public float damping;
 
-        [Tooltip("Percentage of shock propagation applied to particle-particle collisions. Useful for particle stacking.")]
-        [Range(0, 1)]
-        public float shockPropagation;
-
         [Tooltip("Max ratio between a particle's longest and shortest axis. Use 1 for isotropic (completely round) particles.")]
         [Range(1, 5)]
         public float maxAnisotropy;
 
+        [Tooltip("Mass-normalized kinetic energy threshold below which particle positions aren't updated.")]
+        public float sleepThreshold;
+
+        [Tooltip("Maximum distance between elements (simplices/colliders) for a contact to be generated.")]
+        public float collisionMargin;
+
         [Tooltip("Maximum depenetration velocity applied to particles that start a frame inside an object. Low values ensure no 'explosive' collision resolution. Should be > 0 unless looking for non-physical effects.")]
         public float maxDepenetration;
 
-        [Tooltip("Kinetic energy below which particle positions arent updated. Energy values are mass-normalized, so all particles in the solver have the same threshold.")]
-        public float sleepThreshold;
+        [Tooltip("Percentage of particle velocities used for continuous collision detection. Set to 0 for purely static collisions, set to 1 for pure continuous collisions.")]
+        [Range(0, 1)]
+        public float continuousCollisionDetection;
+
+        [Tooltip("Percentage of shock propagation applied to particle-particle collisions. Useful for particle stacking.")]
+        [Range(0, 1)]
+        public float shockPropagation;
+
+        [Tooltip("Amount of iterations spent on convex optimization for surface collisions.")]
+        [Range(1, 32)]
+        public int surfaceCollisionIterations;
+
+        [Tooltip("Error threshold at which to stop convex optimization for surface collisions.")]
+        public float surfaceCollisionTolerance;
+
 
         public SolverParameters(Interpolation interpolation, Vector4 gravity)
         {
@@ -134,9 +141,13 @@ public static class Oni
             this.interpolation = interpolation;
             damping = 0;
             shockPropagation = 0;
+            surfaceCollisionIterations = 8;
+            surfaceCollisionTolerance = 0.005f;
             maxAnisotropy = 3;
-            maxDepenetration = 5;
-            sleepThreshold = 0.0001f;
+            maxDepenetration = 10;
+            sleepThreshold = 0.0005f;
+            collisionMargin = 0.02f;
+            continuousCollisionDetection = 1;
         }
 
     }
@@ -175,12 +186,12 @@ public static class Oni
 
     }
 
-    // In this particular case, size is forced to 128 bytes to ensure 16 byte memory alignment needed by Oni.
-    [StructLayout(LayoutKind.Sequential, Size = 128)]
+    // In this particular case, size is forced to 144 bytes to ensure 16 byte memory alignment needed by Oni.
+    [StructLayout(LayoutKind.Sequential, Size = 144)]
     public struct Contact
     {
-
-        public Vector4 point; 		   /**< Speculative point of contact. */
+        public Vector4 pointA;
+        public Vector4 pointB; 		   /**< Speculative point of contact. */
         public Vector4 normal;         /**< Normal direction. */
         public Vector4 tangent;        /**< Tangent direction. */
         public Vector4 bitangent;	   /**< Bitangent direction. */
@@ -193,9 +204,8 @@ public static class Oni
         public float stickImpulse;
         public float rollingFrictionImpulse;
 
-        public int particle; /** particle index*/
-        public int other;    /** particle or rigidbody index*/
-
+        public int bodyA;    /** simplex index*/
+        public int bodyB;    /** simplex or rigidbody index*/
     }
 
     public static GCHandle PinMemory(object data)
@@ -221,7 +231,7 @@ public static class Oni
 #if (OBI_ONI_SUPPORTED)
 
     [DllImport(LIBNAME)]
-    public static extern void UpdateColliderGrid();
+    public static extern void UpdateColliderGrid(float dt);
 
     [DllImport(LIBNAME)]
     public static extern void SetColliders(IntPtr shapes, IntPtr bounds, IntPtr transforms, int count);
@@ -274,7 +284,6 @@ public static class Oni
     [DllImport(LIBNAME)]
     public static extern void SetRigidbodyAngularDeltas(IntPtr solver, IntPtr angularDeltas);
 
-
     [DllImport(LIBNAME)]
     public static extern void GetBounds(IntPtr solver, ref Vector3 min, ref Vector3 max);
 
@@ -283,6 +292,12 @@ public static class Oni
 
     [DllImport(LIBNAME)]
     public static extern void GetParticleGrid(IntPtr solver, GridCell[] cells);
+
+    [DllImport(LIBNAME)]
+    public static extern int SpatialQuery(IntPtr solver, IntPtr shapes, IntPtr transforms, int count);
+
+    [DllImport(LIBNAME)]
+    public static extern void GetQueryResults(IntPtr solver, IntPtr results, int num);
 
     [DllImport(LIBNAME)]
     public static extern void SetSolverParameters(IntPtr solver, ref SolverParameters parameters);
@@ -297,7 +312,7 @@ public static class Oni
     public static extern IntPtr CollisionDetection(IntPtr solver, float delta_time);
 
     [DllImport(LIBNAME)]
-    public static extern IntPtr Step(IntPtr solver, float delta_time);
+    public static extern IntPtr Step(IntPtr solver, float step_time, float substep_time, int substeps);
 
     [DllImport(LIBNAME)]
     public static extern void ApplyPositionInterpolation(IntPtr solver, IntPtr draw_positions, IntPtr draw_orientations, float delta_seconds, float unsimulated_time);
@@ -313,6 +328,9 @@ public static class Oni
 
     [DllImport(LIBNAME)]
     public static extern void SetParticlePhases(IntPtr solver, IntPtr phases);
+
+    [DllImport(LIBNAME)]
+    public static extern void SetParticleFilters(IntPtr solver, IntPtr filters);
 
     [DllImport(LIBNAME)]
     public static extern void SetParticleCollisionMaterials(IntPtr solver, IntPtr materialIndices);
@@ -414,6 +432,9 @@ public static class Oni
     public static extern void SetParticleAnisotropies(IntPtr solver, IntPtr anisotropies);
 
     [DllImport(LIBNAME)]
+    public static extern void SetSimplices(IntPtr solver, int[] indices, int pointCount, int edgeCount, int triangleCount);
+
+    [DllImport(LIBNAME)]
     public static extern int GetDeformableTriangleCount(IntPtr solver);
 
     [DllImport(LIBNAME)]
@@ -471,6 +492,7 @@ public static class Oni
     public static extern void SetBendingConstraints(IntPtr batch, IntPtr indices,
                                                                   IntPtr restBends,
                                                                   IntPtr bendingStiffnesses,
+                                                                  IntPtr plasticity,
                                                                   IntPtr lambdas,
                                                                   int num);
 
@@ -510,6 +532,8 @@ public static class Oni
                                                           IntPtr restComs,
                                                           IntPtr coms,
                                                           IntPtr orientations,
+                                                          IntPtr linearTransforms,
+                                                          IntPtr plasticDeformations,
                                                           int num);
 
     [DllImport(LIBNAME)]
@@ -531,6 +555,7 @@ public static class Oni
                                                       IntPtr orientationIndices,
                                                       IntPtr restDarboux,
                                                       IntPtr stiffnesses,
+                                                      IntPtr plasticity,
                                                       IntPtr lambdas,
                                                       int num);
 
@@ -577,7 +602,7 @@ public static class Oni
     public static extern int InterpolateDiffuseParticles(IntPtr solver, IntPtr properties, IntPtr diffusePositions, IntPtr diffuseProperties, IntPtr neighbourCount, int n);
 
     [DllImport(LIBNAME)]
-    public static extern int MakePhase(int group, ParticleFlags flags);
+    public static extern int MakePhase(int group, ObiUtils.ParticleFlags flags);
 
     [DllImport(LIBNAME)]
     public static extern int GetGroupFromPhase(int phase);

@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct UpdateInertiaTensorsJob : IJobParallelFor
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
 
         [ReadOnly] public NativeArray<float> inverseMasses;
         [ReadOnly] public NativeArray<float> inverseRotationalMasses;

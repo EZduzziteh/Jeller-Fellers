@@ -11,9 +11,9 @@ namespace Obi
         {
         }
 
-        public void SetBendTwistConstraints(ObiNativeIntList orientationIndices, ObiNativeQuaternionList restOrientations, ObiNativeVector3List stiffnesses, ObiNativeFloatList lambdas, int count)
+        public void SetBendTwistConstraints(ObiNativeIntList orientationIndices, ObiNativeQuaternionList restOrientations, ObiNativeVector3List stiffnesses, ObiNativeVector2List plasticity, ObiNativeFloatList lambdas, int count)
         {
-            Oni.SetBendTwistConstraints(oniBatch, orientationIndices.GetIntPtr(), restOrientations.GetIntPtr(), stiffnesses.GetIntPtr(), lambdas.GetIntPtr(), count);
+            Oni.SetBendTwistConstraints(oniBatch, orientationIndices.GetIntPtr(), restOrientations.GetIntPtr(), stiffnesses.GetIntPtr(), plasticity.GetIntPtr(), lambdas.GetIntPtr(), count);
         }
     }
 }

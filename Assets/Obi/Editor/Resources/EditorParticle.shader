@@ -1,4 +1,4 @@
-﻿Shader "Obi/EditorParticles"
+﻿Shader "Obi/EditorPoint"
 {
     SubShader
     {

@@ -41,11 +41,11 @@ namespace Obi{
             // update collider:
             var shape = world.colliderShapes[index];
             shape.type = ColliderShape.ShapeType.Heightmap;
-            shape.phase = source.Phase;
+            shape.filter = source.Filter;
             shape.flags = terrain.isTrigger ? 1 : 0;
             shape.rigidbodyIndex = source.Rigidbody != null ? source.Rigidbody.handle.index : -1;
             shape.materialIndex = source.CollisionMaterial != null ? source.CollisionMaterial.handle.index : -1;
-            shape.contactOffset = terrain.contactOffset + source.Thickness;
+            shape.contactOffset = source.Thickness;
             shape.dataIndex = handle.index;
             shape.size = terrain.terrainData.size;
             shape.center = new Vector4(resolution, resolution, resolution, resolution);

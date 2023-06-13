@@ -8,6 +8,8 @@ namespace Obi
     {
         private int refCount = 0;
 
+        public int referenceCount { get { return refCount; } }
+
         public void Awake()
         {
             ObiColliderWorld.GetInstance().RegisterImplementation(this);
@@ -28,9 +30,9 @@ namespace Obi
                 DestroyImmediate(gameObject);
         }
 
-        public void UpdateWorld()
+        public void UpdateWorld(float deltaTime)
         {
-            Oni.UpdateColliderGrid();
+            Oni.UpdateColliderGrid(deltaTime);
         }
 
         public void SetColliders(ObiNativeColliderShapeList shapes, ObiNativeAabbList bounds, ObiNativeAffineTransformList transforms, int count)

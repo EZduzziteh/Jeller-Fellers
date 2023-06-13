@@ -1,6 +1,5 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
 using System;
-using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -18,151 +17,51 @@ namespace Obi
     public class ParticleGrid : IDisposable
     {
         public NativeMultilevelGrid<int> grid;
-        private NativeQueue<MovingEntity> movingParticles;
         public NativeQueue<BurstContact> particleContactQueue;
         public NativeQueue<FluidInteraction> fluidInteractionQueue;
 
-        private NativeArray<int> previousActiveParticles;
-
+      
         [BurstCompile]
-        struct IdentifyMovingParticles : IJobParallelFor
+        struct CalculateCellCoords : IJobParallelFor
         {
-
-            [WriteOnly]
-            [NativeDisableParallelForRestriction]
-            public NativeQueue<MovingEntity>.ParallelWriter movingParticles;
-
-            [ReadOnly] public NativeList<int> activeParticles;
-            [ReadOnly] public NativeArray<float4> radii;
-            [ReadOnly] public NativeArray<float> fluidRadii;
-            [ReadOnly] public NativeArray<float4> positions;
-
-            [ReadOnly] public NativeArray<int> particleMaterialIndices;
-            [ReadOnly] public NativeArray<BurstCollisionMaterial> collisionMaterials;
+            [ReadOnly] public NativeArray<BurstAabb> simplexBounds;
+             public NativeArray<int4> cellCoords;
             [ReadOnly] public bool is2D;
 
-            [NativeDisableParallelForRestriction] public NativeArray<int4> cellCoord;
-
-            public void Execute(int index)
+            public void Execute(int i)
             {
-                int i = activeParticles[index];
-
-                // Find this particle's stick distance:
-                float stickDistance = 0;
-                if (particleMaterialIndices[i] >= 0)
-                    stickDistance = collisionMaterials[particleMaterialIndices[i]].stickDistance;
-
-                // Use it (together with radius and fluid radius) to calculate its size in the grid.
-                float size = radii[i].x * 2.2f + stickDistance;
-                size = math.max(size, fluidRadii[i] * 1.1f);
-
-                int level = NativeMultilevelGrid<int>.GridLevelForSize(size);
+                int level = NativeMultilevelGrid<int>.GridLevelForSize(simplexBounds[i].AverageAxisLength());
                 float cellSize = NativeMultilevelGrid<int>.CellSizeOfLevel(level);
 
                 // get new particle cell coordinate:
-                int4 newCellCoord = new int4(GridHash.Quantize(positions[i].xyz, cellSize), level);
+                int4 newCellCoord = new int4(GridHash.Quantize(simplexBounds[i].center.xyz, cellSize), level);
 
                 // if the solver is 2D, project the particle to the z = 0 cell.
                 if (is2D) newCellCoord[2] = 0;
 
-                // if the current cell is different from the current one, the particle has changed cell. 
-                if (!newCellCoord.Equals(cellCoord[i]))
-                {
-                    movingParticles.Enqueue(new MovingEntity()
-                    {
-                        oldCellCoord = cellCoord[i],
-                        newCellCoord = newCellCoord,
-                        entity = i
-                    });
-                    cellCoord[i] = newCellCoord;
-                }
+                cellCoords[i] = newCellCoord;
             }
         }
 
         [BurstCompile]
-        public struct RemoveInactiveParticles : IJob
+        struct UpdateGrid : IJob
         {
-            [ReadOnly] public NativeList<int> activeParticles;
-            [ReadOnly] public NativeArray<int> previousActiveParticles;
-
-            [NativeDisableParallelForRestriction] public NativeArray<int4> cellCoords;
             public NativeMultilevelGrid<int> grid;
+            [ReadOnly] public NativeArray<int4> cellCoords;
+            [ReadOnly] public int simplexCount;
 
             public void Execute()
             {
-                int currentA = 0;
-                int currentB = 0;
+                grid.Clear();
 
-                int lastA = previousActiveParticles.Length;
-                int lastB = activeParticles.Length;
-
-                NativeList<int> inactive = new NativeList<int>(math.max(lastA, lastB), Allocator.Temp);
-
-                // perform a set difference to find particles rendered inactive since last update:
-                while (currentA != lastA && currentB != lastB)
+                for (int i = 0; i < simplexCount; ++i)
                 {
-                    if (previousActiveParticles[currentA] < activeParticles[currentB])
-                        inactive.Add(previousActiveParticles[currentA++]);
-                    else if (activeParticles[currentB] < previousActiveParticles[currentA])
-                        ++currentB;
-                    else
-                    {
-                        ++currentA; ++currentB;
-                    }
-                }
-
-                // copy remaining elements:
-                for (int i = currentA; i < lastA; ++i)
-                    inactive.Add(previousActiveParticles[i]);
-
-                // remove these particles from their current cell:
-                for (int i = 0; i < inactive.Length; ++i)
-                {
-                    int cellIndex;
-                    if (grid.TryGetCellIndex(cellCoords[inactive[i]], out cellIndex))
-                    {
-                        var oldCell = grid.usedCells[cellIndex];
-                        oldCell.Remove(inactive[i]);
-                        grid.usedCells[cellIndex] = oldCell;
-
-                        // set their current cell coord to an invalid value:
-                        cellCoords[inactive[i]] = new int4(int.MaxValue);
-                    }
-                }
-            }
-        }
-
-        [BurstCompile]
-        struct UpdateMovingParticles : IJob
-        {
-
-            public NativeQueue<MovingEntity> movingParticles;
-            public NativeMultilevelGrid<int> grid;
-
-            public void Execute()
-            {
-                while (movingParticles.Count > 0)
-                {
-                    MovingEntity movingParticle = movingParticles.Dequeue();
-
-                    // remove from old cell:
-                    int cellIndex;
-                    if (grid.TryGetCellIndex(movingParticle.oldCellCoord, out cellIndex))
-                    {
-                        var oldCell = grid.usedCells[cellIndex];
-                        oldCell.Remove(movingParticle.entity);
-                        grid.usedCells[cellIndex] = oldCell;
-                    }
-
                     // add to new cell:
-                    cellIndex = grid.GetOrCreateCell(movingParticle.newCellCoord);
-
+                    int cellIndex = grid.GetOrCreateCell(cellCoords[i]);
                     var newCell = grid.usedCells[cellIndex];
-                    newCell.Add(movingParticle.entity);
+                    newCell.Add(i);
                     grid.usedCells[cellIndex] = newCell;
                 }
-
-                grid.RemoveEmpty();
             }
         }
 
@@ -176,11 +75,19 @@ namespace Obi
             [ReadOnly] public NativeArray<float4> positions;
             [ReadOnly] public NativeArray<quaternion> orientations;
             [ReadOnly] public NativeArray<float4> restPositions;
+            [ReadOnly] public NativeArray<quaternion> restOrientations;
             [ReadOnly] public NativeArray<float4> velocities;
             [ReadOnly] public NativeArray<float> invMasses;
             [ReadOnly] public NativeArray<float4> radii;
+            [ReadOnly] public NativeArray<float4> normals;
             [ReadOnly] public NativeArray<float> fluidRadii;
             [ReadOnly] public NativeArray<int> phases;
+            [ReadOnly] public NativeArray<int> filters;
+
+            // simplex arrays:
+            [ReadOnly] public NativeArray<int> simplices;
+            [ReadOnly] public SimplexCounts simplexCounts;
+            [ReadOnly] public NativeArray<BurstAabb> simplexBounds;
 
             [ReadOnly] public NativeArray<int> particleMaterialIndices;
             [ReadOnly] public NativeArray<BurstCollisionMaterial> collisionMaterials;
@@ -194,17 +101,27 @@ namespace Obi
             public NativeQueue<FluidInteraction>.ParallelWriter fluidInteractionsQueue;
 
             [ReadOnly] public float dt;
+            [ReadOnly] public float collisionMargin;
+            [ReadOnly] public int optimizationIterations;
+            [ReadOnly] public float optimizationTolerance;
 
             public void Execute(int i)
             {
+                BurstSimplex simplexShape = new BurstSimplex()
+                {
+                    positions = restPositions,
+                    radii = radii,
+                    simplices = simplices,
+                };
+
                 // Looks for close particles in the same cell:
-                IntraCellSearch(i);
+                IntraCellSearch(i, ref simplexShape);
 
                 // Looks for close particles in neighboring cells, in the same level or higher levels.
-                IntraLevelSearch(i);
+                IntraLevelSearch(i, ref simplexShape);
             }
 
-            private void IntraCellSearch(int cellIndex)
+            private void IntraCellSearch(int cellIndex, ref BurstSimplex simplexShape)
             {
                 int cellLength = grid.usedCells[cellIndex].Length;
 
@@ -212,12 +129,12 @@ namespace Obi
                 {
                     for (int n = p + 1; n < cellLength; ++n)
                     {
-                        InteractionTest(grid.usedCells[cellIndex][p], grid.usedCells[cellIndex][n]);
+                        InteractionTest(grid.usedCells[cellIndex][p], grid.usedCells[cellIndex][n], ref simplexShape);
                     }
                 }
             }
 
-            private void InterCellSearch(int cellIndex, int neighborCellIndex)
+            private void InterCellSearch(int cellIndex, int neighborCellIndex, ref BurstSimplex simplexShape)
             {
                 int cellLength = grid.usedCells[cellIndex].Length;
                 int neighborCellLength = grid.usedCells[neighborCellIndex].Length;
@@ -226,12 +143,12 @@ namespace Obi
                 {
                     for (int n = 0; n < neighborCellLength; ++n)
                     {
-                        InteractionTest(grid.usedCells[cellIndex][p], grid.usedCells[neighborCellIndex][n]);
+                        InteractionTest(grid.usedCells[cellIndex][p], grid.usedCells[neighborCellIndex][n], ref simplexShape);
                     }
                 }
             }
 
-            private void IntraLevelSearch(int cellIndex)
+            private void IntraLevelSearch(int cellIndex, ref BurstSimplex simplexShape)
             {
                 int4 cellCoords = grid.usedCells[cellIndex].Coords;
 
@@ -243,7 +160,7 @@ namespace Obi
                     int neighborCellIndex;
                     if (grid.TryGetCellIndex(neighborCellCoords, out neighborCellIndex))
                     {
-                        InterCellSearch(cellIndex, neighborCellIndex);
+                        InterCellSearch(cellIndex, neighborCellIndex, ref simplexShape);
                     }
                 }
 
@@ -269,99 +186,165 @@ namespace Obi
                                     int neighborCellIndex;
                                     if (grid.TryGetCellIndex(neighborCellCoords, out neighborCellIndex))
                                     {
-                                        InterCellSearch(cellIndex, neighborCellIndex);
+                                        InterCellSearch(cellIndex, neighborCellIndex, ref simplexShape);
                                     }
                                 }
                     }
                 }
             }
 
-            public void InteractionTest(int A, int B)
+            private int GetSimplexGroup(int simplexStart, int simplexSize, out ObiUtils.ParticleFlags flags, out int category, out int mask, ref bool restPositionsEnabled)
             {
-                bool samePhase = (phases[A] & (int)Oni.ParticleFlags.GroupMask) == (phases[B] & (int)Oni.ParticleFlags.GroupMask);
-                bool noSelfCollide = (phases[A] & (int)Oni.ParticleFlags.SelfCollide) == 0 || (phases[B] & (int)Oni.ParticleFlags.SelfCollide) == 0;
+                flags = 0;
+                int group = 0;
+                category = 0;
+                mask = 0;
+                for (int j = 0; j < simplexSize; ++j)
+                {
+                    int particleIndex = simplices[simplexStart + j];
+                    flags |= ObiUtils.GetFlagsFromPhase(phases[particleIndex]);
+                    category |= filters[particleIndex] & ObiUtils.FilterCategoryBitmask;
+                    mask |= (filters[particleIndex] & ObiUtils.FilterMaskBitmask) >> 16;
+                    group = math.max(group, ObiUtils.GetGroupFromPhase(phases[particleIndex]));
+                    restPositionsEnabled |= restPositions[particleIndex].w > 0.5f;
+                }
 
-                // only particles of a different phase or set to self-collide can interact.
-                if (samePhase && noSelfCollide)
+                return group;
+            }
+
+            private void InteractionTest(int A, int B, ref BurstSimplex simplexShape)
+            {
+                // skip the pair if their bounds don't intersect:
+                if (!simplexBounds[A].IntersectsAabb(simplexBounds[B]))
+                    return;
+                
+                // get the start index and size of each simplex:
+                int simplexStartA = simplexCounts.GetSimplexStartAndSize(A, out int simplexSizeA);
+                int simplexStartB = simplexCounts.GetSimplexStartAndSize(B, out int simplexSizeB);
+
+                // immediately reject simplex pairs that share particles:
+                for (int a = 0; a < simplexSizeA; ++a)
+                    for (int b = 0; b < simplexSizeB; ++b)
+                        if (simplices[simplexStartA + a] == simplices[simplexStartB + b])
+                            return;
+
+                // get group for each simplex:
+                bool restPositionsEnabled = false;
+                int groupA = GetSimplexGroup(simplexStartA, simplexSizeA, out ObiUtils.ParticleFlags flagsA, out int categoryA, out int maskA, ref restPositionsEnabled);
+                int groupB = GetSimplexGroup(simplexStartB, simplexSizeB, out ObiUtils.ParticleFlags flagsB, out int categoryB, out int maskB, ref restPositionsEnabled);
+
+                // if all particles are in the same group:
+                if (groupA == groupB)
+                {
+                    // if none are self-colliding, reject the pair.
+                    if ((flagsA & flagsB & ObiUtils.ParticleFlags.SelfCollide) == 0)
+                        return;
+                }
+                // category-based filtering:
+                else if ((maskA & categoryB) == 0 || (maskB & categoryA) == 0)
                     return;
 
-                // Predict positions at the end of the whole step:
-                float4 predictedPositionA = positions[A] + velocities[A] * dt;
-                float4 predictedPositionB = positions[B] + velocities[B] * dt;
-
-                // Calculate particle center distance:
-                float4 dab = predictedPositionA - predictedPositionB;
-                float d2 = math.lengthsq(dab);
-
-                // if both particles are fluid, check their smoothing radii:
-                if ((phases[A] & (int)Oni.ParticleFlags.Fluid) != 0 &&
-                    (phases[B] & (int)Oni.ParticleFlags.Fluid) != 0)
+                // if all simplices are fluid, check their smoothing radii:
+                if ((flagsA & ObiUtils.ParticleFlags.Fluid) != 0 && (flagsB & ObiUtils.ParticleFlags.Fluid) != 0)
                 {
-                    float fluidDistance = math.max(fluidRadii[A], fluidRadii[B]);
+                    int particleA = simplices[simplexStartA];
+                    int particleB = simplices[simplexStartB];
+
+                    // for fluid we only consider the first particle in each simplex.
+                    float4 predictedPositionA = positions[particleA] + velocities[particleA] * dt;
+                    float4 predictedPositionB = positions[particleB] + velocities[particleB] * dt;
+
+                    // Calculate particle center distance:
+                    float d2 = math.lengthsq(predictedPositionA - predictedPositionB);
+
+                    float fluidDistance = math.max(fluidRadii[particleA], fluidRadii[particleB]);
                     if (d2 <= fluidDistance * fluidDistance)
                     {
-                        fluidInteractionsQueue.Enqueue(new FluidInteraction { particleA = A, particleB = B });
+                        fluidInteractionsQueue.Enqueue(new FluidInteraction { particleA = particleA, particleB = particleB });
                     }
                 }
-                else // at least one solid particle
+                else // at least one solid particle is present:
                 {
-                    float solidDistance = radii[A].x + radii[B].x;
-
-                    // if these particles are self-colliding (have same phase), see if they intersect at rest.
-                    if (samePhase &&
-                        restPositions[A].w > 0.5f &&
-                        restPositions[B].w > 0.5f)
+                    // swap simplices so that B is always the one-sided one.
+                    if ((flagsA & ObiUtils.ParticleFlags.OneSided) != 0 && categoryA < categoryB)
                     {
-                        // if rest positions intersect, return too.
-                        float sqr_rest_distance = math.lengthsq(restPositions[A] - restPositions[B]);
-                        if (sqr_rest_distance < solidDistance * solidDistance)
-                            return;
+                        ObiUtils.Swap(ref A, ref B);
+                        ObiUtils.Swap(ref simplexStartA, ref simplexStartB);
+                        ObiUtils.Swap(ref simplexSizeA, ref simplexSizeB);
+                        ObiUtils.Swap(ref flagsA, ref flagsB);
+                        ObiUtils.Swap(ref groupA, ref groupB);
                     }
 
-                    // calculate distance at which particles are able to interact:
-                    int matIndexA = particleMaterialIndices[A];
-                    int matIndexB = particleMaterialIndices[B];
-                    float interactionDistance = solidDistance * 1.2f + (matIndexA >= 0 ? collisionMaterials[matIndexA].stickDistance : 0) +
-                                                                       (matIndexB >= 0 ? collisionMaterials[matIndexB].stickDistance : 0);
+                    float4 simplexBary = BurstMath.BarycenterForSimplexOfSize(simplexSizeA);
+                    float4 simplexPoint;
 
-                    // if the distance between their predicted positions is smaller than the interaction distance:
-                    if (math.lengthsq(dab) <= interactionDistance * interactionDistance)
+                    simplexShape.simplexStart = simplexStartB;
+                    simplexShape.simplexSize = simplexSizeB;
+                    simplexShape.positions = restPositions;
+                    simplexShape.CacheData();
+
+                    float simplexRadiusA = 0, simplexRadiusB = 0;
+
+                    // skip the contact if there's self-intersection at rest:
+                    if (groupA == groupB && restPositionsEnabled)
                     {
-                        // calculate contact normal and distance:
-                        float4 normal = positions[A] - positions[B];
-                        float distance = math.length(normal);
+                        var restPoint = BurstLocalOptimization.Optimize<BurstSimplex>(ref simplexShape, restPositions, restOrientations, radii,
+                                                    simplices, simplexStartA, simplexSizeA, ref simplexBary, out simplexPoint, 4, 0);
 
-                        if (distance > BurstMath.epsilon)
+                        for (int j = 0; j < simplexSizeA; ++j)
+                            simplexRadiusA += radii[simplices[simplexStartA + j]].x * simplexBary[j];
+
+                        for (int j = 0; j < simplexSizeB; ++j)
+                            simplexRadiusB += radii[simplices[simplexStartB + j]].x * restPoint.bary[j];
+
+                        // compare distance along contact normal with radius.
+                        if (math.dot(simplexPoint - restPoint.point, restPoint.normal) < simplexRadiusA + simplexRadiusB)
+                            return; 
+                    }
+
+                    simplexBary = BurstMath.BarycenterForSimplexOfSize(simplexSizeA);
+                    simplexShape.positions = positions;
+                    simplexShape.CacheData();
+
+                    var surfacePoint = BurstLocalOptimization.Optimize<BurstSimplex>(ref simplexShape, positions, orientations, radii,
+                                        simplices, simplexStartA, simplexSizeA, ref simplexBary, out simplexPoint, optimizationIterations, optimizationTolerance);
+
+                    simplexRadiusA = 0; simplexRadiusB = 0;
+                    float4 velocityA = float4.zero, velocityB = float4.zero, normalB = float4.zero;
+
+                    for (int j = 0; j < simplexSizeA; ++j)
+                    {
+                        int particleIndex = simplices[simplexStartA + j];
+                        simplexRadiusA += radii[particleIndex].x * simplexBary[j];
+                        velocityA += velocities[particleIndex] * simplexBary[j];
+                    }
+
+                    for (int j = 0; j < simplexSizeB; ++j)
+                    {
+                        int particleIndex = simplices[simplexStartB + j];
+                        simplexRadiusB += radii[particleIndex].x * surfacePoint.bary[j];
+                        velocityB += velocities[particleIndex] * surfacePoint.bary[j];
+                        normalB += normals[particleIndex] * surfacePoint.bary[j];
+                    }
+
+                    float dAB = math.dot(simplexPoint - surfacePoint.point, surfacePoint.normal);
+                    float vel = math.dot(velocityA    - velocityB,          surfacePoint.normal);
+
+                    // check if the projected velocity along the contact normal will get us within collision distance.
+                    if (vel * dt + dAB <= simplexRadiusA + simplexRadiusB + collisionMargin)
+                    {
+                        // adapt collision normal for one-sided simplices:
+                        if ((flagsB & ObiUtils.ParticleFlags.OneSided) != 0 && categoryA < categoryB)
+                            BurstMath.OneSidedNormal(normalB, ref surfacePoint.normal);
+
+                        contactsQueue.Enqueue(new BurstContact()
                         {
-                            normal /= distance;
-
-                            float rA = BurstMath.EllipsoidRadius(normal, orientations[A], radii[A].xyz);
-                            float rB = BurstMath.EllipsoidRadius(normal, orientations[B], radii[B].xyz);
-
-                            // adapt normal for one-sided particles:
-                            if ((phases[A] & (int)Oni.ParticleFlags.OneSided) != 0 &&
-                                (phases[B] & (int)Oni.ParticleFlags.OneSided) != 0)
-                            {
-                                float3 adjustment = float3.zero;
-                                if (rA < rB)
-                                    adjustment = math.mul(orientations[A], new float3(0, 0, -1));
-                                else
-                                    adjustment = math.mul(orientations[B], new float3(0, 0, 1));
-
-                                float dot = math.dot(normal.xyz, adjustment);
-                                if (dot < 0)
-                                    normal -= 2 * dot * new float4(adjustment, 0);
-                            }
-
-                            contactsQueue.Enqueue(new BurstContact
-                            {
-                                entityA = A,
-                                entityB = B,
-                                point = positions[B] + normal * rB,
-                                normal = normal,
-                                distance = distance - (rA + rB)
-                            });
-                        }
+                            bodyA = A,
+                            bodyB = B,
+                            pointA = simplexBary,
+                            pointB = surfacePoint.bary,
+                            normal = surfacePoint.normal
+                        });
                     }
                 }
             }
@@ -449,54 +432,34 @@ namespace Obi
         public ParticleGrid()
         {
             this.grid = new NativeMultilevelGrid<int>(1000, Allocator.Persistent);
-            this.movingParticles = new NativeQueue<MovingEntity>(Allocator.Persistent);
             this.particleContactQueue = new NativeQueue<BurstContact>(Allocator.Persistent);
             this.fluidInteractionQueue = new NativeQueue<FluidInteraction>(Allocator.Persistent);
-            this.previousActiveParticles = new NativeArray<int>(0,Allocator.Persistent);
         }
 
-        public void UpdateGrid(BurstSolverImpl solver, JobHandle inputDeps)
+        public void Update(BurstSolverImpl solver, float deltaTime, JobHandle inputDeps)
         {
-            var identifyMoving = new IdentifyMovingParticles
+            var calculateCells = new CalculateCellCoords
             {
-                activeParticles = solver.activeParticles,
-                movingParticles = movingParticles.AsParallelWriter(),
-                radii = solver.principalRadii,
-                fluidRadii = solver.smoothingRadii,
-                positions = solver.positions,
-                cellCoord = solver.cellCoords,
-                particleMaterialIndices = solver.abstraction.collisionMaterials.AsNativeArray<int>(),
-                collisionMaterials = ObiColliderWorld.GetInstance().collisionMaterials.AsNativeArray<BurstCollisionMaterial>(),
-                is2D = solver.abstraction.parameters.mode == Oni.SolverParameters.Mode.Mode2D
-            };
-            inputDeps = identifyMoving.Schedule(solver.activeParticleCount, 64, inputDeps);
-
-            var removeInactive = new RemoveInactiveParticles
-            {
-                activeParticles = solver.activeParticles,
-                previousActiveParticles = previousActiveParticles,
+                simplexBounds = solver.simplexBounds,
                 cellCoords = solver.cellCoords,
-                grid = grid
+                is2D = solver.abstraction.parameters.mode == Oni.SolverParameters.Mode.Mode2D,
             };
-            inputDeps = removeInactive.Schedule(inputDeps);
 
-            var updateMoving = new UpdateMovingParticles
+            inputDeps = calculateCells.Schedule(solver.simplexCounts.simplexCount, 4, inputDeps);
+
+            var updateGrid = new UpdateGrid
             {
-                movingParticles = movingParticles,
-                grid = grid
+                grid = grid,
+                cellCoords = solver.cellCoords,
+                simplexCount = solver.simplexCounts.simplexCount
             };
-            updateMoving.Schedule(inputDeps).Complete();
-
-            if (previousActiveParticles.IsCreated)
-                previousActiveParticles.Dispose();
-
-            previousActiveParticles = solver.activeParticles.ToArray(Allocator.Persistent);
+            updateGrid.Schedule(inputDeps).Complete();
         }
 
         public JobHandle GenerateContacts(BurstSolverImpl solver, float deltaTime)
         {
 
-            var generateParticleContactsJob = new ParticleGrid.GenerateParticleParticleContactsJob
+            var generateParticleContactsJob = new GenerateParticleParticleContactsJob
             {
                 grid = grid,
                 gridLevels = grid.populatedLevels.GetKeyArray(Allocator.TempJob),
@@ -504,22 +467,31 @@ namespace Obi
                 positions = solver.positions,
                 orientations = solver.orientations,
                 restPositions = solver.restPositions,
+                restOrientations = solver.restOrientations,
                 velocities = solver.velocities,
                 invMasses = solver.invMasses,
                 radii = solver.principalRadii,
+                normals = solver.normals,
                 fluidRadii = solver.smoothingRadii,
                 phases = solver.phases,
+                filters = solver.filters,
+
+                simplices = solver.simplices,
+                simplexCounts = solver.simplexCounts,
+                simplexBounds = solver.simplexBounds,
 
                 particleMaterialIndices = solver.abstraction.collisionMaterials.AsNativeArray<int>(),
                 collisionMaterials = ObiColliderWorld.GetInstance().collisionMaterials.AsNativeArray<BurstCollisionMaterial>(),
 
                 contactsQueue = particleContactQueue.AsParallelWriter(),
                 fluidInteractionsQueue = fluidInteractionQueue.AsParallelWriter(),
-                dt = deltaTime
+                dt = deltaTime,
+                collisionMargin = solver.abstraction.parameters.collisionMargin,
+                optimizationIterations = solver.abstraction.parameters.surfaceCollisionIterations,
+                optimizationTolerance = solver.abstraction.parameters.surfaceCollisionTolerance,
             };
 
-            return generateParticleContactsJob.Schedule(grid.CellCount, 2);
-
+            return generateParticleContactsJob.Schedule(grid.CellCount, 1);
         }
 
         public JobHandle InterpolateDiffuseProperties(BurstSolverImpl solver,
@@ -558,6 +530,36 @@ namespace Obi
             return interpolateDiffusePropertiesJob.Schedule(diffuseCount, 64);
         }
 
+        public JobHandle SpatialQuery(BurstSolverImpl solver,
+                                      NativeArray<BurstQueryShape> shapes,
+                                      NativeArray<BurstAffineTransform> transforms,
+                                      NativeQueue<BurstQueryResult> results)
+        {
+            var world = ObiColliderWorld.GetInstance();
+
+            var job = new SpatialQueryJob
+            {
+                grid = grid,
+
+                positions = solver.abstraction.prevPositions.AsNativeArray<float4>(),
+                orientations = solver.abstraction.prevOrientations.AsNativeArray<quaternion>(),
+                radii = solver.abstraction.principalRadii.AsNativeArray<float4>(),
+                filters = solver.abstraction.filters.AsNativeArray<int>(),
+
+                simplices = solver.simplices,
+                simplexCounts = solver.simplexCounts,
+
+                shapes = shapes,
+                transforms = transforms,
+
+                results = results.AsParallelWriter(),
+                worldToSolver = solver.worldToSolver,
+                parameters = solver.abstraction.parameters
+            };
+
+            return job.Schedule(shapes.Length, 4);
+        }
+
         public void GetCells(ObiNativeAabbList cells)
         {
             if (cells.count == grid.usedCells.Length)
@@ -578,10 +580,8 @@ namespace Obi
         public void Dispose()
         {
             grid.Dispose();
-            movingParticles.Dispose();
             particleContactQueue.Dispose();
             fluidInteractionQueue.Dispose();
-            previousActiveParticles.Dispose();
         }
 
     }

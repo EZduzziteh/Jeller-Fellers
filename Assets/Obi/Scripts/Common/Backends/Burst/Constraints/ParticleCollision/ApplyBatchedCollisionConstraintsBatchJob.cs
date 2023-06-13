@@ -15,6 +15,9 @@ namespace Obi
     {
         [ReadOnly] public NativeArray<BurstContact> contacts;
 
+        [ReadOnly] public NativeArray<int> simplices;
+        [ReadOnly] public SimplexCounts simplexCounts;
+
         [NativeDisableParallelForRestriction] public NativeArray<float4> positions;
         [NativeDisableParallelForRestriction] public NativeArray<float4> deltas;
         [NativeDisableParallelForRestriction] public NativeArray<int> counts;
@@ -33,11 +36,23 @@ namespace Obi
 
             for (int i = start; i < end; ++i)
             {
-                BurstConstraintsBatchImpl.ApplyPositionDelta(contacts[i].entityA, constraintParameters.SORFactor, ref positions, ref deltas, ref counts);
-                BurstConstraintsBatchImpl.ApplyPositionDelta(contacts[i].entityB, constraintParameters.SORFactor, ref positions, ref deltas, ref counts);
+                int simplexStartA = simplexCounts.GetSimplexStartAndSize(contacts[i].bodyA, out int simplexSizeA);
+                int simplexStartB = simplexCounts.GetSimplexStartAndSize(contacts[i].bodyB, out int simplexSizeB);
 
-                BurstConstraintsBatchImpl.ApplyOrientationDelta(contacts[i].entityA, constraintParameters.SORFactor, ref orientations, ref orientationDeltas, ref orientationCounts);
-                BurstConstraintsBatchImpl.ApplyOrientationDelta(contacts[i].entityB, constraintParameters.SORFactor, ref orientations, ref orientationDeltas, ref orientationCounts);
+                for (int j = 0; j < simplexSizeA; ++j)
+                {
+                    int particleIndex = simplices[simplexStartA + j];
+                    BurstConstraintsBatchImpl.ApplyPositionDelta(particleIndex, constraintParameters.SORFactor, ref positions, ref deltas, ref counts);
+                    BurstConstraintsBatchImpl.ApplyOrientationDelta(particleIndex, constraintParameters.SORFactor, ref orientations, ref orientationDeltas, ref orientationCounts);
+                }
+
+                for (int j = 0; j < simplexSizeB; ++j)
+                {
+                    int particleIndex = simplices[simplexStartB + j];
+                    BurstConstraintsBatchImpl.ApplyPositionDelta(particleIndex, constraintParameters.SORFactor, ref positions, ref deltas, ref counts);
+                    BurstConstraintsBatchImpl.ApplyOrientationDelta(particleIndex, constraintParameters.SORFactor, ref orientations, ref orientationDeltas, ref orientationCounts);
+                }
+
             }
             
         }

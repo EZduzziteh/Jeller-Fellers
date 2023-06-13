@@ -11,9 +11,9 @@ namespace Obi
         {
         }
 
-        public void SetBendConstraints(ObiNativeIntList particleIndices, ObiNativeFloatList restBends, ObiNativeVector2List bendingStiffnesses, ObiNativeFloatList lambdas, int count)
+        public void SetBendConstraints(ObiNativeIntList particleIndices, ObiNativeFloatList restBends, ObiNativeVector2List bendingStiffnesses, ObiNativeVector2List plasticity, ObiNativeFloatList lambdas, int count)
         {
-            Oni.SetBendingConstraints(oniBatch, particleIndices.GetIntPtr(), restBends.GetIntPtr(), bendingStiffnesses.GetIntPtr(), lambdas.GetIntPtr(), count);
+            Oni.SetBendingConstraints(oniBatch, particleIndices.GetIntPtr(), restBends.GetIntPtr(), bendingStiffnesses.GetIntPtr(), plasticity.GetIntPtr(), lambdas.GetIntPtr(), count);
         }
     }
 }

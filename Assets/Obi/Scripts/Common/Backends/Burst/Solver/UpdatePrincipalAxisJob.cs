@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct UpdatePrincipalAxisJob : IJobParallelFor
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
         [ReadOnly] public NativeArray<quaternion> renderableOrientations;
         [ReadOnly] public NativeArray<int> phases;
         [ReadOnly] public NativeArray<float4> principalRadii;
@@ -25,7 +25,7 @@ namespace Obi
             int i = activeParticles[index];
 
             // fluid particles get their principal axes from the neighborhood matrix, so skip them.
-            if ((phases[i] & (int)Oni.ParticleFlags.Fluid) == 0)
+            if ((phases[i] & (int)ObiUtils.ParticleFlags.Fluid) == 0)
             {
                 int i3 = i * 3;
                 float4x4 rot = renderableOrientations[i].toMatrix();

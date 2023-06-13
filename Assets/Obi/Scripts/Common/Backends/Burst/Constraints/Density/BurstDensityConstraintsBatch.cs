@@ -19,12 +19,12 @@ namespace Obi
             m_ConstraintType = Oni.ConstraintType.Density;
         }
 
-        public override JobHandle Initialize(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Initialize(JobHandle inputDeps, float substepTime)
         {
             return inputDeps;
         }
 
-        public override JobHandle Evaluate(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Evaluate(JobHandle inputDeps, float stepTime, float substepTime, int substeps)
         {
 
             // update densities and gradients:
@@ -38,14 +38,14 @@ namespace Obi
                 userData = solverImplementation.userData,
                 fluidData = solverImplementation.fluidData,
                 batchData = batchData,
-                dt = deltaTime
+                dt = substepTime
             };
 
             int batchCount = batchData.isLast ? batchData.workItemCount : 1;
             return updateDensities.Schedule(batchData.workItemCount, batchCount, inputDeps);
         }
 
-        public override JobHandle Apply(JobHandle inputDeps, float deltaTime)
+        public override JobHandle Apply(JobHandle inputDeps, float substepTime)
         {
             var parameters = solverAbstraction.GetConstraintParameters(m_ConstraintType);
 

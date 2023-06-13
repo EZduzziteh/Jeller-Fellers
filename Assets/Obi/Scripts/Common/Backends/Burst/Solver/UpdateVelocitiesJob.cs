@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct UpdateVelocitiesJob : IJobParallelFor
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
 
         // linear/position properties:
         [ReadOnly] public NativeArray<float> inverseMasses;
@@ -41,11 +41,6 @@ namespace Obi
                 float4 pos = positions[i];
                 pos[2] = previousPositions[i][2];
                 positions[i] = pos;
-
-                // restrict rotation to the axis perpendicular to the 2D plane.
-                quaternion swing, twist;
-                BurstMath.SwingTwist(orientations[i], new float3(0, 0, 1), out swing, out twist);
-                orientations[i] = twist;
             }
 
             if (inverseMasses[i] > 0)

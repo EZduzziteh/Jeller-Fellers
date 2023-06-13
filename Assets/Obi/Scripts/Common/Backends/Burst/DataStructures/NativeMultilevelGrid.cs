@@ -3,8 +3,7 @@ using System;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
-using Unity.Jobs;
-using Unity.Burst;
+using System.Runtime.CompilerServices;
 
 namespace Obi
 {
@@ -21,7 +20,7 @@ namespace Obi
      *  These characteristics make it extremely flexible, memory efficient, and fast. 
      *  Its implementation is also fairly simple and concise. 
      */
-    public unsafe struct NativeMultilevelGrid<T> : IDisposable where T : struct, IEquatable<T>
+    public unsafe struct NativeMultilevelGrid<T> : IDisposable where T : unmanaged, IEquatable<T>
     {
 
         public const float minSize = 0.01f; 
@@ -29,7 +28,7 @@ namespace Obi
         /**
          * A cell in the multilevel grid. Coords are 4-dimensional, the 4th component is the grid level.
          */
-        public struct Cell<K> where K : struct, IEquatable<K>
+        public struct Cell<K> where K : unmanaged, IEquatable<K>
         {
             int4 coords;
             UnsafeList contents;
@@ -79,7 +78,7 @@ namespace Obi
                 return false;
             }
 
-            public void Destroy()
+            public void Dispose()
             {
                 contents.Dispose();
             }
@@ -103,6 +102,9 @@ namespace Obi
 
         public void Clear()
         {
+            for (int i = 0; i < usedCells.Length; ++i)
+                usedCells[i].Dispose();
+
             grid.Clear();
             usedCells.Clear();
             populatedLevels.Clear();
@@ -110,6 +112,9 @@ namespace Obi
 
         public void Dispose()
         {
+            for (int i = 0; i < usedCells.Length; ++i)
+                usedCells[i].Dispose();
+
             grid.Dispose();
             usedCells.Dispose();
             populatedLevels.Dispose();
@@ -147,6 +152,7 @@ namespace Obi
                 {
                     DecreaseLevelPopulation(usedCells[i].Coords.w);
                     grid.Remove(usedCells[i].Coords);
+                    usedCells[i].Dispose();
                     usedCells.RemoveAtSwapBack(i);
                 }
             }
@@ -159,12 +165,14 @@ namespace Obi
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GridLevelForSize(float size)
         {
             // the magic number is 1/log(2)
             return (int)math.ceil(math.log(math.max(size,minSize)) * 1.44269504089f);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float CellSizeOfLevel(int level)
         {
             return math.exp2(level);

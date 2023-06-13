@@ -6,6 +6,8 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Burst;
+using System.Runtime.CompilerServices;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace Obi
 {
@@ -13,8 +15,12 @@ namespace Obi
     {
 
         public const float epsilon = 0.0000001f;
+        public const float zero = 0;
+        public const float one = 1;
+        public static readonly float golden = (math.sqrt(5.0f) + 1) / 2.0f;
 
         // multiplies a column vector by a row vector.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float3x3 multrnsp(float4 column, float4 row)
         {
             return new float3x3(column[0] * row[0], column[0] * row[1], column[0] * row[2],
@@ -23,14 +29,16 @@ namespace Obi
         }
 
         // multiplies a column vector by a row vector.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4x4 multrnsp4(float4 column, float4 row)
         {
-            return new float4x4(column[0] * row[0], column[0] * row[1], column[0] * row[2],0,
-                                column[1] * row[0], column[1] * row[1], column[1] * row[2],0,
-                                column[2] * row[0], column[2] * row[1], column[2] * row[2],0,
-                                0,0,0,1);
+            return new float4x4(column[0] * row[0], column[0] * row[1], column[0] * row[2], 0,
+                                column[1] * row[0], column[1] * row[1], column[1] * row[2], 0,
+                                column[2] * row[0], column[2] * row[1], column[2] * row[2], 0,
+                                0, 0, 0, 1);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4 project(this float4 vector, float4 onto)
         {
             float len = math.lengthsq(onto);
@@ -39,40 +47,107 @@ namespace Obi
             return math.dot(onto, vector) * onto / len;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4x4 TransformInertiaTensor(float4 tensor, quaternion rotation)
         {
             float4x4 rotMatrix = rotation.toMatrix();
             return math.mul(rotMatrix, math.mul(tensor.asDiagonal(), math.transpose(rotMatrix)));
         }
 
-        public static float RotationalInvMass(float4x4 inverseInertiaTensor, float4 r, float4 axis)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float RotationalInvMass(float4x4 inverseInertiaTensor, float4 point, float4 direction)
         {
-            float4 cr = math.mul(inverseInertiaTensor, new float4(math.cross(r.xyz, axis.xyz), 0));
-            return math.dot(math.cross(cr.xyz, r.xyz), axis.xyz);
+            float4 cr = math.mul(inverseInertiaTensor, new float4(math.cross(point.xyz, direction.xyz), 0));
+            return math.dot(math.cross(cr.xyz, point.xyz), direction.xyz);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4 GetParticleVelocityAtPoint(float4 position, float4 prevPosition, float4 point, float dt)
         {
             // no angular velocity, so calculate and return linear velocity only:
             return BurstIntegration.DifferentiateLinear(position, prevPosition, dt);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4 GetParticleVelocityAtPoint(float4 position, float4 prevPosition, quaternion orientation, quaternion prevOrientation, float4 point, float dt)
         {
             // calculate both linear and angular velocities:
             float4 linearVelocity = BurstIntegration.DifferentiateLinear(position, prevPosition, dt);
             float4 angularVelocity = BurstIntegration.DifferentiateAngular(orientation, prevOrientation, dt);
-
             return linearVelocity + new float4(math.cross(angularVelocity.xyz, (point - prevPosition).xyz), 0);
         }
 
-        public static float4 GetRigidbodyVelocityAtPoint(BurstRigidbody rigidbody, float4 point, float4 linearDelta, float4 angularDelta, BurstAffineTransform transform)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float4 GetRigidbodyVelocityAtPoint(int rigidbodyIndex,
+                                                         float4 point,
+                                                         NativeArray<BurstRigidbody> rigidbodies,
+                                                         NativeArray<float4> linearDeltas,
+                                                         NativeArray<float4> angularDeltas,
+                                                         BurstAffineTransform solverToWorld) 
         {
+            float4 linear  = rigidbodies[rigidbodyIndex].velocity + linearDeltas[rigidbodyIndex];
+            float4 angular = rigidbodies[rigidbodyIndex].angularVelocity + angularDeltas[rigidbodyIndex];
+            float4 r = solverToWorld.TransformPoint(point) - rigidbodies[rigidbodyIndex].com;
+
             // Point is assumed to be expressed in solver space. Since rigidbodies are expressed in world space, we need to convert the
             // point to world space, and convert the resulting velocity back to solver space.
-            return transform.InverseTransformVector(rigidbody.GetVelocityAtPoint(transform.TransformPoint(point), linearDelta , angularDelta));
+            return solverToWorld.InverseTransformVector(linear + new float4(math.cross(angular.xyz, r.xyz), 0));
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float4 GetRigidbodyVelocityAtPoint(int rigidbodyIndex,
+                                                         float4 point,
+                                                         NativeArray<BurstRigidbody> rigidbodies,
+                                                         BurstAffineTransform solverToWorld)
+        {
+            float4 linear = rigidbodies[rigidbodyIndex].velocity;
+            float4 angular = rigidbodies[rigidbodyIndex].angularVelocity;
+            float4 r = solverToWorld.TransformPoint(point) - rigidbodies[rigidbodyIndex].com;
+
+            // Point is assumed to be expressed in solver space. Since rigidbodies are expressed in world space, we need to convert the
+            // point to world space, and convert the resulting velocity back to solver space.
+            return solverToWorld.InverseTransformVector(linear + new float4(math.cross(angular.xyz, r.xyz), 0));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ApplyImpulse(int rigidbodyIndex,
+                                        float4 impulse,
+                                        float4 point,
+                                        NativeArray<BurstRigidbody> rigidbodies,
+                                        NativeArray<float4> linearDeltas,
+                                        NativeArray<float4> angularDeltas,
+                                        BurstAffineTransform solverToWorld)
+        {
+            float4 impulseWS = solverToWorld.TransformVector(impulse);
+            float4 r = solverToWorld.TransformPoint(point) - rigidbodies[rigidbodyIndex].com;
+            linearDeltas[rigidbodyIndex]  += rigidbodies[rigidbodyIndex].inverseMass * impulseWS;
+            angularDeltas[rigidbodyIndex] += math.mul(rigidbodies[rigidbodyIndex].inverseInertiaTensor, new float4(math.cross(r.xyz, impulseWS.xyz), 0));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ApplyDeltaQuaternion(int rigidbodyIndex,
+                                                quaternion rotation,
+                                                quaternion delta,
+                                                NativeArray<float4> angularDeltas,
+                                                BurstAffineTransform solverToWorld,
+                                                float dt)
+        {
+            quaternion rotationWS = math.mul(solverToWorld.rotation, rotation);
+            quaternion deltaWS = math.mul(solverToWorld.rotation, delta);
+
+            // convert quaternion delta to angular acceleration:
+            quaternion newRotation = math.normalize(new quaternion(rotationWS.value + deltaWS.value));
+            angularDeltas[rigidbodyIndex] += BurstIntegration.DifferentiateAngular(newRotation, rotationWS, dt);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void OneSidedNormal(float4 forward, ref float4 normal)
+        {
+            float dot = math.dot(normal.xyz, forward.xyz);
+            if (dot < 0) normal -= 2 * dot * forward;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float EllipsoidRadius(float4 normSolverDirection, quaternion orientation, float3 radii)
         {
             float3 localDir = math.mul(math.conjugate(orientation), normSolverDirection.xyz);
@@ -93,16 +168,18 @@ namespace Obi
                 if (w < BurstMath.epsilon)
                     break;
 
-                rotation = math.normalize(math.mul(quaternion.AxisAngle((1.0f/w) * omega,w),rotation));
+                rotation = math.normalize(math.mul(quaternion.AxisAngle((1.0f / w) * omega, w), rotation));
             }
             return rotation;
         }
 
         // decomposes a quaternion in swing and twist around a given axis:
-        public static void SwingTwist(quaternion q, float3 vt, out quaternion swing, out quaternion twist)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void SwingTwist(quaternion q, float3 twistAxis, out quaternion swing, out quaternion twist)
         {
-            float3 p = vt * math.dot(q.value.xyz,vt);
-            twist = math.normalize(new quaternion(p[0], p[1], p[2], q.value.w));
+            float dot = math.dot(q.value.xyz, twistAxis);
+            float3 p = twistAxis * dot;
+            twist = math.normalizesafe(new quaternion(p[0], p[1], p[2], q.value.w));
             swing = math.mul(q, math.conjugate(twist));
         }
 
@@ -120,12 +197,13 @@ namespace Obi
             float zz = q.value.z * q.value.z;
             float zw = q.value.z * q.value.w;
 
-            return new float4x4(1-2*(yy+zz), 2*(xy-zw), 2*(xz+yw),0,
-                                2*(xy+zw), 1-2*(xx+zz), 2*(yz-xw),0,
-                                2*(xz-yw),2*(yz+xw),1-2*(xx+yy),0,
-                                0,0,0,1);
+            return new float4x4(1 - 2 * (yy + zz), 2 * (xy - zw), 2 * (xz + yw), 0,
+                                2 * (xy + zw), 1 - 2 * (xx + zz), 2 * (yz - xw), 0,
+                                2 * (xz - yw), 2 * (yz + xw), 1 - 2 * (xx + yy), 0,
+                                0, 0, 0, 1);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4x4 asDiagonal(this float4 v)
         {
             return new float4x4(v.x, 0, 0, 0,
@@ -134,11 +212,13 @@ namespace Obi
                                 0, 0, 0, v.w);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float4 diagonal(this float4x4 value)
         {
             return new float4(value.c0[0], value.c1[1], value.c2[2], value.c3[3]);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float frobeniusNorm(this float4x4 m)
         {
             return math.sqrt(math.lengthsq(m.c0) + math.lengthsq(m.c1) + math.lengthsq(m.c2) + math.lengthsq(m.c3));
@@ -187,8 +267,8 @@ namespace Obi
         static float3 unitOrthogonal(this float3 input)
         {
             // Find a vector to cross() the input with.
-            if (!(input.x < input.z * BurstMath.epsilon)
-            ||  !(input.y < input.z * BurstMath.epsilon))
+            if (!(input.x < input.z * epsilon)
+            || !(input.y < input.z * epsilon))
             {
                 float invnm = 1 / math.length(input.xy);
                 return new float3(-input.y * invnm, input.x * invnm, 0);
@@ -196,7 +276,7 @@ namespace Obi
             else
             {
                 float invnm = 1 / math.length(input.yz);
-                return new float3(0,-input.z * invnm, input.y * invnm);
+                return new float3(0, -input.z * invnm, input.y * invnm);
             }
         }
 
@@ -217,7 +297,7 @@ namespace Obi
             float C01s = c1p[0] * c1p[0];
             float C02s = c2p[0] * c2p[0];
             float C12s = c2p[1] * c2p[1];
-            float3 norm = new float3(c0p[0]*c0p[0] + C01s + C02s,
+            float3 norm = new float3(c0p[0] * c0p[0] + C01s + C02s,
                                      C01s + c1p[1] * c1p[1] + C12s,
                                      C02s + C12s + c2p[2] * c2p[2]);
 
@@ -312,30 +392,39 @@ namespace Obi
             return new float3(e2, e1, e0);
         }
 
-        public static float4 NearestPointOnTri(float4 p1,
-                                                float4 p2,
-                                                float4 p3,
-                                                float4 p)
+        public struct CachedTri
         {
+            public float4 vertex;
+            public float4 edge0;
+            public float4 edge1;
+            public float4 data;
 
-            float4 edge0 = p2 - p1;
-            float4 edge1 = p3 - p1;
-            float4 v0 = p1 - p;
+            public void Cache(float4 v1,
+                              float4 v2,
+                              float4 v3)
+            {
+                vertex = v1;
+                edge0 = v2 - v1;
+                edge1 = v3 - v1;
+                data = float4.zero;
+                data[0] = math.dot(edge0, edge0);
+                data[1] = math.dot(edge0, edge1);
+                data[2] = math.dot(edge1, edge1);
+                data[3] = data[0] * data[2] - data[1] * data[1];
+            }
+        }
 
-            float a00 = math.dot(edge0, edge0);
-            float a01 = math.dot(edge0, edge1);
-            float a11 = math.dot(edge1, edge1);
-            float b0 = math.dot(edge0, v0);
-            float b1 = math.dot(edge1, v0);
+        public static float4 NearestPointOnTri(in CachedTri tri,
+                                               float4 p,
+                                               out float4 bary)
+        {
+            float4 v0 = tri.vertex - p;
+            float b0 = math.dot(tri.edge0, v0);
+            float b1 = math.dot(tri.edge1, v0);
+            float t0 = tri.data[1] * b1 - tri.data[2] * b0;
+            float t1 = tri.data[1] * b0 - tri.data[0] * b1;
 
-            const float zero = 0;
-            const float one = 1;
-
-            float det = a00 * a11 - a01 * a01;
-            float t0 = a01 * b1 - a11 * b0;
-            float t1 = a01 * b0 - a00 * b1;
-
-            if (t0 + t1 <= det)
+            if (t0 + t1 <= tri.data[3])
             {
                 if (t0 < zero)
                 {
@@ -344,68 +433,46 @@ namespace Obi
                         if (b0 < zero)
                         {
                             t1 = zero;
-                            if (-b0 >= a00)  // V0
-                            {
+                            if (-b0 >= tri.data[0])  // V0
                                 t0 = one;
-                            }
                             else  // E01
-                            {
-                                t0 = -b0 / a00;
-                            }
+                                t0 = -b0 / tri.data[0];
                         }
                         else
                         {
                             t0 = zero;
                             if (b1 >= zero)  // V0
-                            {
                                 t1 = zero;
-                            }
-                            else if (-b1 >= a11)  // V2
-                            {
+                            else if (-b1 >= tri.data[2])  // V2
                                 t1 = one;
-                            }
                             else  // E20
-                            {
-                                t1 = -b1 / a11;
-                            }
+                                t1 = -b1 / tri.data[2];
                         }
                     }
                     else  // region 3
                     {
                         t0 = zero;
                         if (b1 >= zero)  // V0
-                        {
                             t1 = zero;
-                        }
-                        else if (-b1 >= a11)  // V2
-                        {
+                        else if (-b1 >= tri.data[2])  // V2
                             t1 = one;
-                        }
                         else  // E20
-                        {
-                            t1 = -b1 / a11;
-                        }
+                            t1 = -b1 / tri.data[2];
                     }
                 }
                 else if (t1 < zero)  // region 5
                 {
                     t1 = zero;
                     if (b0 >= zero)  // V0
-                    {
                         t0 = zero;
-                    }
-                    else if (-b0 >= a00)  // V1
-                    {
+                    else if (-b0 >= tri.data[0])  // V1
                         t0 = one;
-                    }
                     else  // E01
-                    {
-                        t0 = -b0 / a00;
-                    }
+                        t0 = -b0 / tri.data[0];
                 }
                 else  // region 0, interior
                 {
-                    float invDet = one / det;
+                    float invDet = one / tri.data[3];
                     t0 *= invDet;
                     t1 *= invDet;
                 }
@@ -416,12 +483,12 @@ namespace Obi
 
                 if (t0 < zero)  // region 2
                 {
-                    tmp0 = a01 + b0;
-                    tmp1 = a11 + b1;
+                    tmp0 = tri.data[1] + b0;
+                    tmp1 = tri.data[2] + b1;
                     if (tmp1 > tmp0)
                     {
                         numer = tmp1 - tmp0;
-                        denom = a00 - 2 * a01 + a11;
+                        denom = tri.data[0] - 2 * tri.data[1] + tri.data[2];
                         if (numer >= denom)  // V1
                         {
                             t0 = one;
@@ -437,27 +504,21 @@ namespace Obi
                     {
                         t0 = zero;
                         if (tmp1 <= zero)  // V2
-                        {
                             t1 = one;
-                        }
                         else if (b1 >= zero)  // V0
-                        {
                             t1 = zero;
-                        }
                         else  // E20
-                        {
-                            t1 = -b1 / a11;
-                        }
+                            t1 = -b1 / tri.data[2];
                     }
                 }
                 else if (t1 < zero)  // region 6
                 {
-                    tmp0 = a01 + b1;
-                    tmp1 = a00 + b0;
+                    tmp0 = tri.data[1] + b1;
+                    tmp1 = tri.data[0] + b0;
                     if (tmp1 > tmp0)
                     {
                         numer = tmp1 - tmp0;
-                        denom = a00 - 2 * a01 + a11;
+                        denom = tri.data[0] - 2 * tri.data[1] + tri.data[2];
                         if (numer >= denom)  // V2
                         {
                             t1 = one;
@@ -473,22 +534,16 @@ namespace Obi
                     {
                         t1 = zero;
                         if (tmp1 <= zero)  // V1
-                        {
                             t0 = one;
-                        }
                         else if (b0 >= zero)  // V0
-                        {
                             t0 = zero;
-                        }
                         else  // E01
-                        {
-                            t0 = -b0 / a00;
-                        }
+                            t0 = -b0 / tri.data[0];
                     }
                 }
                 else  // region 1
                 {
-                    numer = a11 + b1 - a01 - b0;
+                    numer = tri.data[2] + b1 - tri.data[1] - b0;
                     if (numer <= zero)  // V2
                     {
                         t0 = zero;
@@ -496,7 +551,7 @@ namespace Obi
                     }
                     else
                     {
-                        denom = a00 - 2 * a01 + a11;
+                        denom = tri.data[0] - 2 * tri.data[1] + tri.data[2];
                         if (numer >= denom)  // V1
                         {
                             t0 = one;
@@ -511,28 +566,140 @@ namespace Obi
                 }
             }
 
-            return p1 + t0 * edge0 + t1 * edge1;
+            bary = new float4(1 - (t0 + t1), t0, t1,0);
+            return tri.vertex + t0 * tri.edge0 + t1 * tri.edge1;
         }
 
-        public static float4 NearestPointOnEdge(float4 p1,float4 p2,float4 p)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float4 NearestPointOnEdge(float4 a, float4 b, float4 p, out float mu, bool clampToSegment = true)
         {
-        
-            float4 edge = p2 - p1;
+            float4 ap = p - a;
+            float4 ab = b - a;
 
-            // test if before first point:
-            float4 v0 = p - p1;
-            float v0_dot_edge = math.dot(v0,edge);
-            if (v0_dot_edge <= 0.0)
-                return p1;
+            mu = math.dot(ap, ab) / math.dot(ab, ab);
 
-            // test if after second point:
-            float4 v1 = p - p2;
-            if (math.dot(v1,edge) >= 0.0)
-                return p2 ;
-        
-            // return projection:
-            return p1 + v0_dot_edge / math.dot(edge,edge) * edge;
+            if (clampToSegment)
+                mu = math.saturate(mu);
 
+            return a + ab * mu;
+        }
+
+        public static float4 NearestPointsTwoEdges(float4 a, float4 b, float4 c, float4 d, out float mu1, out float mu2)
+        {
+            float4 dc = d - c;
+            float lineDirSqrMag = math.dot(dc, dc);
+            float4 inPlaneA = a - (math.dot(a - c, dc) / lineDirSqrMag * dc);
+            float4 inPlaneB = b - (math.dot(b - c, dc) / lineDirSqrMag * dc);
+
+            float4 inPlaneBA = inPlaneB - inPlaneA;
+            float t = math.dot(c - inPlaneA, inPlaneBA) / math.dot(inPlaneBA, inPlaneBA);
+
+            //t = (inPlaneA != inPlaneB) ? t : 0f; // Zero's t if parallel
+            float4 segABtoLineCD = math.lerp(a, b, math.saturate(t));
+
+            float4 segCDtoSegAB = NearestPointOnEdge(c, d, segABtoLineCD, out mu1);
+            float4 segABtoSegCD = NearestPointOnEdge(a, b, segCDtoSegAB, out mu2);
+
+            return segCDtoSegAB;
+        }
+
+        public static float4 BaryCoords(in float4 A,
+                                        in float4 B,
+                                        in float4 C,
+                                        in float4 P)
+        {
+
+            // Compute vectors
+            float4 v0 = C - A;
+            float4 v1 = B - A;
+            float4 v2 = P - A;
+
+            // Compute dot products
+            float dot00 = math.dot(v0, v0);
+            float dot01 = math.dot(v0, v1);
+            float dot02 = math.dot(v0, v2);
+            float dot11 = math.dot(v1, v1);
+            float dot12 = math.dot(v1, v2);
+
+            // Compute barycentric coordinates
+            float det = dot00 * dot11 - dot01 * dot01;
+            if (math.abs(det) > epsilon)
+            {
+                float u = (dot11 * dot02 - dot01 * dot12) / det;
+                float v = (dot00 * dot12 - dot01 * dot02) / det;
+                return new float4(1 - u - v, v, u, 0);
+            }
+            return float4.zero;
+
+        }
+
+        public static float4 BaryCoords2(in float4 A,
+                                         in float4 B,
+                                         in float4 P)
+        {
+            float4 v0 = P - A;
+            float4 v1 = B - A;
+            float y = math.sqrt(math.dot(v0, v0) / (math.dot(v1, v1) + epsilon));
+            return new float4(1 - y, y, 0, 0);
+        }
+
+        public static float4 BaryIntrpl(in float4 p1, in float4 p2, in float4 p3, in float4 coords)
+        {
+            return coords[0] * p1 + coords[1] * p2 + coords[2] * p3;
+        }
+
+        public static float4 BaryIntrpl(in float4 p1, in float4 p2, in float4 coords)
+        {
+            return coords[0] * p1 + coords[1] * p2;
+        }
+
+        public static float BaryIntrpl(float p1, float p2, float p3, float4 coords)
+        {
+            return coords[0] * p1 + coords[1] * p2 + coords[2] * p3;
+        }
+
+        public static float BaryIntrpl(float p1, float p2, float4 coords)
+        {
+            return coords[0] * p1 + coords[1] * p2;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float BaryScale(float4 coords)
+        {
+            return 1.0f / math.dot(coords, coords);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float4 BarycenterForSimplexOfSize(int simplexSize)
+        {
+            float value = 1f / simplexSize;
+            float4 center = float4.zero;
+            for (int i = 0; i < simplexSize; ++i)
+                center[i] = value;
+            return center;
+        }
+
+        public static unsafe void RemoveRangeBurst<T>(this NativeList<T> list, int index, int count)
+            where T : unmanaged
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            if ((uint)index >= (uint)list.Length)
+            {
+                throw new IndexOutOfRangeException(
+                    $"Index {index} is out of range in NativeList of '{list.Length}' Length.");
+            }
+#endif
+
+            int elemSize = UnsafeUtility.SizeOf<T>();
+            byte* basePtr = (byte*)list.GetUnsafePtr();
+
+            UnsafeUtility.MemMove(basePtr + (index * elemSize), basePtr + ((index + count) * elemSize), elemSize * (list.Length - count - index));
+
+            // No easy way to change length so we just loop this unfortunately.
+            for (var i = 0; i < count; i++)
+            {
+                list.RemoveAtSwapBack(list.Length - 1);
+            }
         }
     }
 }

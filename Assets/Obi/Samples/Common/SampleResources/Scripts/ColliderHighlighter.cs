@@ -32,7 +32,7 @@ public class ColliderHighlighter : MonoBehaviour {
 			if (c.distance < 0.01f)
 			{
 				// get the collider:
-				var col = colliderWorld.colliderHandles[c.other].owner;
+				var col = colliderWorld.colliderHandles[c.bodyB].owner;
 
 				if (col != null)
                 {

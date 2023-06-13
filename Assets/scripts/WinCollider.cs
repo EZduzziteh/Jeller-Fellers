@@ -2,38 +2,43 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class WinCollider : MonoBehaviour
+namespace JellerFellers
 {
-    LevelManager levelMan;
-    AudioSource aud;
-    // Start is called before the first frame update
-    void Start()
+
+    public class WinCollider : MonoBehaviour
     {
-        aud = GetComponent<AudioSource>();
-        levelMan = FindObjectOfType<LevelManager>();
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-
-    }
-
-    private void OnTriggerEnter(Collider other)
-    {
+        LevelManager levelMan;
+        AudioSource aud;
+        // Start is called before the first frame update
+        void Start()
+        {
+            aud = GetComponent<AudioSource>();
+            levelMan = FindObjectOfType<LevelManager>();
+        }
 
 
-        if (other.tag == "Player")
+
+        private void OnTriggerEnter(Collider other)
+        {
+
+
+            if (other.tag == "Player")
+            {
+                HandleWin();
+            }
+        }
+
+        public void HandleWin()
         {
             aud.Play();
             Invoke("WinLevel", aud.clip.length + 0.3f);
-           
-        }
-    }
 
-    void WinLevel()
-    {
-       // PlayerPrefs.SetInt()
-        levelMan.LoadNextLevel();
+        }
+
+        void WinLevel()
+        {
+            // PlayerPrefs.SetInt()
+            levelMan.LoadNextLevel();
+        }
     }
 }

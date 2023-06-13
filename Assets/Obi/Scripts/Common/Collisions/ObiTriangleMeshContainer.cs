@@ -73,9 +73,9 @@ namespace Obi
 
         public ObiTriangleMeshHandle GetOrCreateTriangleMesh(Mesh source)
         {
-            ObiTriangleMeshHandle handle;
+            ObiTriangleMeshHandle handle = new ObiTriangleMeshHandle(null);
 
-            if (!handles.TryGetValue(source, out handle))
+            if (source != null && !handles.TryGetValue(source, out handle))
             { 
                 var sourceTris = source.triangles;
                 var sourceVertices = source.vertices;

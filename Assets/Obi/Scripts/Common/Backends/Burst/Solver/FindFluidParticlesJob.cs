@@ -12,7 +12,7 @@ namespace Obi
     [BurstCompile]
     struct FindFluidParticlesJob : IJob
     {
-        [ReadOnly] public NativeList<int> activeParticles;
+        [ReadOnly] public NativeArray<int> activeParticles;
         [ReadOnly] public NativeArray<int> phases;
 
         public NativeList<int> fluidParticles;
@@ -24,7 +24,7 @@ namespace Obi
             for (int i = 0; i < activeParticles.Length; ++i)
             {
                 int p = activeParticles[i];
-                if ((phases[p] & (int)Oni.ParticleFlags.Fluid) != 0)
+                if ((phases[p] & (int)ObiUtils.ParticleFlags.Fluid) != 0)
                     fluidParticles.Add(p);
             }
         }

@@ -9,7 +9,7 @@ using Unity.Jobs;
 
 namespace Obi
 {
-    public static class ConstraintSorter
+    public class ConstraintSorter<T> where T : unmanaged, IConstraint
     {
 
         public struct ConstraintComparer<K> : IComparer<K> where K : IConstraint
@@ -25,10 +25,10 @@ namespace Obi
          * Performs a single-threaded count sort on the constraints array using the first particle index,
          * then multiple parallel sorts over slices of the original array sorting by the second particle index.
          */
-        public static JobHandle SortConstraints<T>(int particleCount,
-                                                    NativeArray<T> constraints,
-                                                    ref NativeArray<T> sortedConstraints,
-                                                    JobHandle handle) where T : struct, IConstraint
+        public JobHandle SortConstraints(int particleCount,
+                                         NativeArray<T> constraints,
+                                         ref NativeArray<T> sortedConstraints,
+                                         JobHandle handle)
         {
             // Count the amount of digits in the largest particle index that can be referenced by a constraint:
             NativeArray<int> totalCountUpToDigit = new NativeArray<int>(particleCount + 1, Allocator.TempJob);
@@ -43,7 +43,7 @@ namespace Obi
                 }
             }
 
-            handle = new CountSortPerFirstParticleJob<T>
+            handle = new CountSortPerFirstParticleJob
             {
                 input = constraints,
                 output = sortedConstraints,
@@ -55,21 +55,21 @@ namespace Obi
             // Sort sub arrays with default sort.
             int numPerBatch = math.max(1, maxBodyIndex / 32);
 
-            handle = new SortSubArraysJob<T>
+            handle = new SortSubArraysJob
             {
                 InOutArray = sortedConstraints,
                 NextElementIndex = totalCountUpToDigit,
-                comparer =  new ConstraintComparer<T>()
+                comparer = new ConstraintComparer<T>()
             }.Schedule(totalCountUpToDigit.Length, numPerBatch, handle);
 
             return handle;
         }
 
         [BurstCompile]
-        public struct CountSortPerFirstParticleJob<K> : IJob where K : struct, IConstraint
+        public struct CountSortPerFirstParticleJob : IJob
         {
-            [ReadOnly][NativeDisableContainerSafetyRestriction] public NativeArray<K> input;
-            public NativeArray<K> output;
+            [ReadOnly] [NativeDisableContainerSafetyRestriction] public NativeArray<T> input;
+            public NativeArray<T> output;
 
             [NativeDisableContainerSafetyRestriction] public NativeArray<int> digitCount;
 
@@ -112,14 +112,14 @@ namespace Obi
 
         // Sorts slices of an array in parallel
         [BurstCompile]
-        public struct SortSubArraysJob<K> : IJobParallelFor where K : struct, IConstraint
+        public struct SortSubArraysJob : IJobParallelFor
         {
-            [NativeDisableContainerSafetyRestriction] public NativeArray<K> InOutArray;
+            [NativeDisableContainerSafetyRestriction] public NativeArray<T> InOutArray;
 
             // Typically lastDigitIndex is resulting RadixSortPerBodyAJob.digitCount. nextElementIndex[i] = index of first element with bodyA index == i + 1
-            [NativeDisableContainerSafetyRestriction][DeallocateOnJobCompletion] public NativeArray<int> NextElementIndex;
+            [NativeDisableContainerSafetyRestriction] [DeallocateOnJobCompletion] public NativeArray<int> NextElementIndex;
 
-            [ReadOnly] public ConstraintComparer<K> comparer;
+            [ReadOnly] public ConstraintComparer<T> comparer;
 
             public void Execute(int workItemIndex)
             {
@@ -136,7 +136,7 @@ namespace Obi
                 }
             }
 
-            public static void DefaultSortOfSubArrays(NativeArray<K> inOutArray, int startIndex, int length, ConstraintComparer<K> comparer)
+            public static void DefaultSortOfSubArrays(NativeArray<T> inOutArray, int startIndex, int length, ConstraintComparer<T> comparer)
             {
                 if (length > 2)
                 {

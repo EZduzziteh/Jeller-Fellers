@@ -1,62 +1,164 @@
 ﻿using NVIDIA.Flex;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-
-public class CharacterController : MonoBehaviour
+namespace JellerFellers
 {
-    [SerializeField]
-    float jumpForce=20000;
-    [SerializeField]
-    float moveForce = 50.0f;
-    float timeHeldJump = 0.0f;
-    bool holdingjump = false;
-    [SerializeField]
-    float maxHeldJump = 2.5f;
-    [SerializeField]
-    float flexScale=0.05f;
-
-    public int coins;
-    public int Stars;
-    bool isDead = false;
-
-    public Text coinText;
-    
-
-    public AudioSource aud;
-    [SerializeField]
-    AudioClip Jump;
-    [SerializeField]
-    AudioClip Death;
-    [SerializeField]
-    AudioClip CollectStar;
-    [SerializeField]
-    AudioClip CollectCoin;
-    // Start is called before the first frame update
-    private void Start()
+    public class CharacterController : MonoBehaviour
     {
-        aud = GetComponent<AudioSource>();
-    }
+        [SerializeField]
+        float jumpForce = 20000;
+        [SerializeField]
+        float moveForce = 50.0f;
 
-    // Update is called once per frame
-    void Update()
-    {
-        if (isDead)
+        public float airControl = 15.0f;
+        float timeHeldJump = 0.0f;
+        bool holdingjump = false;
+        [SerializeField]
+        float maxHeldJump = 2.5f;
+        [SerializeField]
+        float flexScale = 0.05f;
+
+        public int coins;
+        public int Stars;
+        bool isDead = false;
+
+        public Text coinText;
+        public bool isGrounded = true;
+
+        public AudioSource aud;
+        [SerializeField]
+        AudioClip Jump;
+        [SerializeField]
+        AudioClip Death;
+        [SerializeField]
+        AudioClip CollectStar;
+        [SerializeField]
+        AudioClip CollectCoin;
+        FlexSoftActor flexActor;
+        // Start is called before the first frame update
+        private void Start()
         {
+            aud = GetComponent<AudioSource>();
+            flexActor = GetComponent<FlexSoftActor>();
 
-            if (Input.anyKey)
+
+        }
+
+
+
+
+        // Update is called once per frame
+        void Update()
+        {
+            if (isDead)
             {
-                SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+
+                if (Input.anyKey)
+                {
+                    SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+                    isGrounded = true;
+                }
+            }
+            else
+            {
+                if (Input.GetKeyUp(KeyCode.Space))
+                {
+                    HandleJump();
+                }
+
+                if (Input.GetKeyDown(KeyCode.Space))
+                {
+                    holdingjump = true;
+                    timeHeldJump = 0.0f;
+                }
+
+                if (holdingjump)
+                {
+                    if (timeHeldJump > maxHeldJump)
+                    {
+                        HandleJump();
+
+                        holdingjump = false;
+                        timeHeldJump = 0.0f;
+
+
+                    }
+                    else
+                    {
+                        timeHeldJump += Time.deltaTime;
+                        flexActor.ApplyImpulse(Vector3.up * -jumpForce * flexScale * timeHeldJump);
+                    }
+
+                }
+
+
+                if (Input.GetKey(KeyCode.W))
+                {
+                    float totalMoveForce = moveForce;
+
+                    //if not grounded, apply air control
+                    if (!isGrounded)
+                    {
+                        totalMoveForce *= airControl;
+                    }
+
+                    Vector3 forwardVector = Camera.main.transform.forward;
+                    flexActor.ApplyImpulse(forwardVector * totalMoveForce * Time.deltaTime);
+
+
+                }
+
+                if (Input.GetKey(KeyCode.S))
+                {
+                    float totalMoveForce = moveForce;
+
+                    //if not grounded, apply air control
+                    if (!isGrounded)
+                    {
+                        totalMoveForce *= airControl;
+                    }
+                    flexActor.ApplyImpulse(-Camera.main.transform.forward * totalMoveForce * Time.deltaTime);
+
+                }
+                if (Input.GetKey(KeyCode.A))
+                {
+                    float totalMoveForce = moveForce;
+
+                    //if not grounded, apply air control
+                    if (!isGrounded)
+                    {
+                        totalMoveForce *= airControl;
+                    }
+                    flexActor.ApplyImpulse(-Camera.main.transform.right * totalMoveForce * Time.deltaTime);
+
+                }
+                if (Input.GetKey(KeyCode.D))
+                {
+                    float totalMoveForce = moveForce;
+
+                    //if not grounded, apply air control
+                    if (!isGrounded)
+                    {
+                        totalMoveForce *= airControl;
+                    }
+                    flexActor.ApplyImpulse(Camera.main.transform.right * totalMoveForce * Time.deltaTime);
+
+                }
             }
         }
-        else
+
+
+        private void HandleJump()
         {
-            if (Input.GetKeyUp(KeyCode.Space))
+            if (isGrounded)
             {
-                GetComponent<FlexSoftActor>().ApplyImpulse(Vector3.up * jumpForce * timeHeldJump);
+                isGrounded = false;
+                flexActor.ApplyImpulse(Vector3.up * jumpForce * timeHeldJump);
                 holdingjump = false;
                 timeHeldJump = 0.0f;
                 if (!aud.isPlaying)
@@ -65,71 +167,19 @@ public class CharacterController : MonoBehaviour
                     aud.Play();
                 }
             }
-
-            if (Input.GetKeyDown(KeyCode.Space))
-            {
-                holdingjump = true;
-                timeHeldJump = 0.0f;
-            }
-
-            if (holdingjump)
-            {
-                if (timeHeldJump > maxHeldJump)
-                {
-                    GetComponent<FlexSoftActor>().ApplyImpulse(Vector3.up * jumpForce * timeHeldJump);
-                    holdingjump = false;
-                    timeHeldJump = 0.0f;
-
-                }
-                else
-                {
-                    timeHeldJump += Time.deltaTime;
-                    GetComponent<FlexSoftActor>().ApplyImpulse(Vector3.up * -jumpForce * flexScale * timeHeldJump);
-                }
-
-            }
-
-
-            if (Input.GetKey(KeyCode.W))
-            {
-
-                GetComponent<FlexSoftActor>().ApplyImpulse(Camera.main.transform.forward * moveForce);
-
-            }
-
-            if (Input.GetKey(KeyCode.S))
-            {
-
-                GetComponent<FlexSoftActor>().ApplyImpulse(-Camera.main.transform.forward * moveForce);
-
-            }
-            if (Input.GetKey(KeyCode.A))
-            {
-
-                GetComponent<FlexSoftActor>().ApplyImpulse(-Camera.main.transform.right * moveForce);
-
-            }
-            if (Input.GetKey(KeyCode.D))
-            {
-
-                GetComponent<FlexSoftActor>().ApplyImpulse(Camera.main.transform.right * moveForce);
-
-            }
         }
+
+        public void Die()
+        {
+            isDead = true;
+            aud.clip = Death;
+            aud.Play();
+
+        }
+
+
+
     }
-
-
-    public void Die()
-    {
-        isDead = true;
-        aud.clip = Death;
-        aud.Play();
-     
-    }
-
-  
-
-
     
 
 

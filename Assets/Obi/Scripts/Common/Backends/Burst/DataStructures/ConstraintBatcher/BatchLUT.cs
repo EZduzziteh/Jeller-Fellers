@@ -14,7 +14,7 @@ namespace Obi
         {
             this.numBatches = numBatches;
 
-            batchIndex = new NativeArray<ushort>(UInt16.MaxValue + 1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            batchIndex = new NativeArray<ushort>(UInt16.MaxValue + 1, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             const ushort end = UInt16.MaxValue;
             ushort numBits = (ushort)(numBatches - 1);
 

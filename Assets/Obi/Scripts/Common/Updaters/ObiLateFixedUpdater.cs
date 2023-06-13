@@ -19,27 +19,28 @@ namespace Obi
         /// Increasing the amount of substeps is more effective than increasing the amount of constraint iterations.
         /// </summary>
         [Tooltip("Amount of substeps performed per FixedUpdate. Increasing the amount of substeps greatly improves accuracy and convergence speed.")]
-        public int substeps = 1;
+        public int substeps = 4;
 
-        private float accumulatedTime;
+        [NonSerialized] private float accumulatedTime;
 
         private void OnValidate()
         {
             substeps = Mathf.Max(1, substeps);
         }
 
-        private void Awake()
-        {
-            accumulatedTime = 0;
-        }
-
         private void OnEnable()
         {
+            accumulatedTime = 0;
             StartCoroutine(RunLateFixedUpdate());
         }
         private void OnDisable()
         {
             StopCoroutine(RunLateFixedUpdate());
+        }
+
+        private void FixedUpdate()
+        {
+            PrepareFrame();
         }
 
         private IEnumerator RunLateFixedUpdate()
@@ -62,10 +63,7 @@ namespace Obi
 
             // Divide the step into multiple smaller substeps:
             for (int i = 0; i < substeps; ++i)
-            {
-                // Simulate Obi:
-                Substep(substepDelta);
-            }
+                Substep(Time.fixedDeltaTime, substepDelta, substeps - i);
 
             EndStep(substepDelta);
 
@@ -76,11 +74,11 @@ namespace Obi
 
         private void Update()
         {
+            accumulatedTime += Time.deltaTime;
+
             ObiProfiler.EnableProfiler();
             Interpolate(Time.fixedDeltaTime, accumulatedTime);
             ObiProfiler.DisableProfiler();
-
-            accumulatedTime += Time.deltaTime;
         }
     }
 }

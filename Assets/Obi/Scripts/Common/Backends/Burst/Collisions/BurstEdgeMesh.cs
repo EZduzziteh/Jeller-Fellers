@@ -1,121 +1,119 @@
 ﻿#if (OBI_BURST && OBI_MATHEMATICS && OBI_COLLECTIONS)
-using System;
-using System.Collections.Generic;
-using UnityEngine;
 using Unity.Collections;
-using Unity.Jobs;
 using Unity.Mathematics;
-using Unity.Burst;
 
 namespace Obi
 {
-    public static class BurstEdgeMesh
+    public struct BurstEdgeMesh : BurstLocalOptimization.IDistanceFunction, IBurstCollider
     {
-        public static void Contacts(int particleIndex,
-                                    int colliderIndex,
-                                    float4 particlePosition,
-                                    quaternion particleOrientation,
-                                    float4 particleVelocity,
-                                    float4 particleRadii,
-                                    float deltaTime,
-                                    ref NativeArray<BIHNode> bihNodes,
-                                    ref NativeArray<Edge> edges,
-                                    ref NativeArray<float2> vertices,
-                                    EdgeMeshHeader header,
-                                    ref BurstAffineTransform colliderToSolver,
-                                    ref BurstColliderShape shape,
-                                    NativeQueue<BurstContact>.ParallelWriter contacts)
+
+        public BurstColliderShape shape;
+        public BurstAffineTransform colliderToSolver;
+        public int dataOffset;
+        public float dt;
+
+        public EdgeMeshHeader header;
+        public NativeArray<BIHNode> edgeBihNodes;
+        public NativeArray<Edge> edges;
+        public NativeArray<float2> vertices;
+
+        public void Evaluate(float4 point, float4 radii, quaternion orientation, ref BurstLocalOptimization.SurfacePoint projectedPoint)
         {
-            float4 colliderSpacePosition = colliderToSolver.InverseTransformPoint(particlePosition);
-            float4 colliderSpaceVel = colliderToSolver.InverseTransformVector(particleVelocity * deltaTime);
+            point = colliderToSolver.InverseTransformPointUnscaled(point);
 
-            BurstAabb particleBounds = new BurstAabb(colliderSpacePosition,
-                                                     colliderSpacePosition + colliderSpaceVel,
-                                                     particleRadii.x / math.cmax(colliderToSolver.scale));
+            if (shape.is2D != 0)
+                point[2] = 0;
 
-            colliderSpacePosition *= colliderToSolver.scale;
+            Edge t = edges[header.firstEdge + dataOffset];
+            float4 v1 = (new float4(vertices[header.firstVertex + t.i1], 0) + shape.center) * colliderToSolver.scale;
+            float4 v2 = (new float4(vertices[header.firstVertex + t.i2], 0) + shape.center) * colliderToSolver.scale;
 
-            BIHTraverse(particleIndex, colliderIndex,
-                        colliderSpacePosition, particleOrientation, colliderSpaceVel, particleRadii, ref particleBounds,
-                        0, ref bihNodes, ref edges, ref vertices, ref header, ref colliderToSolver, ref shape, contacts);
+            float4 nearestPoint = BurstMath.NearestPointOnEdge(v1, v2, point, out float mu);
+            float4 normal = math.normalizesafe(point - nearestPoint);
+
+            projectedPoint.normal = colliderToSolver.TransformDirection(normal);
+            projectedPoint.point = colliderToSolver.TransformPointUnscaled(nearestPoint + normal * shape.contactOffset);
         }
 
-        private static void BIHTraverse(int particleIndex,
-                                        int colliderIndex,
-                                        float4 particlePosition,
-                                        quaternion particleOrientation,
-                                        float4 particleVelocity,
-                                        float4 particleRadii,
-                                        ref BurstAabb particleBounds,
-                                        int nodeIndex,
-                                        ref NativeArray<BIHNode> bihNodes,
-                                        ref NativeArray<Edge> edges,
-                                        ref NativeArray<float2> vertices,
-                                        ref EdgeMeshHeader header,
-                                        ref BurstAffineTransform colliderToSolver,
-                                        ref BurstColliderShape shape,
-                                        NativeQueue<BurstContact>.ParallelWriter contacts)
-        {
-            var node = bihNodes[header.firstNode + nodeIndex];
 
-            // amount by which we should inflate aabbs:
-            float offset = shape.contactOffset + particleRadii.x;
+        public void Contacts(int colliderIndex,
+                             int rigidbodyIndex,
+                             NativeArray<BurstRigidbody> rigidbodies,
+
+                              NativeArray<float4> positions,
+                              NativeArray<quaternion> orientations,
+                              NativeArray<float4> velocities,
+                              NativeArray<float4> radii,
+
+                              NativeArray<int> simplices,
+                              in BurstAabb simplexBounds,
+                              int simplexIndex,
+                              int simplexStart,
+                              int simplexSize,
+
+                              NativeQueue<BurstContact>.ParallelWriter contacts,
+                              int optimizationIterations,
+                              float optimizationTolerance)
+        {
+            if (shape.dataIndex < 0) return;
+
+            BIHTraverse(colliderIndex, simplexIndex, simplexStart, simplexSize,
+                        positions, orientations, radii, simplices, in simplexBounds, 0, contacts, optimizationIterations, optimizationTolerance);
+        }
+
+        private void BIHTraverse(int colliderIndex,
+                                 int simplexIndex,
+                                 int simplexStart,
+                                 int simplexSize,
+                                 NativeArray<float4> positions,
+                                 NativeArray<quaternion> orientations,
+                                 NativeArray<float4> radii,
+                                 NativeArray<int> simplices,
+                                 in BurstAabb simplexBounds,
+                                 int nodeIndex,
+                                 NativeQueue<BurstContact>.ParallelWriter contacts,
+                                 int optimizationIterations,
+                                 float optimizationTolerance)
+        {
+            var node = edgeBihNodes[header.firstNode + nodeIndex];
 
             if (node.firstChild >= 0)
             {
                 // visit min node:
-                if (particleBounds.min[node.axis] - offset <= node.min)
-                    BIHTraverse(particleIndex, colliderIndex,
-                                particlePosition, particleOrientation, particleVelocity, particleRadii, ref particleBounds,
-                                node.firstChild, ref bihNodes, ref edges, ref vertices, ref header,
-                                ref colliderToSolver, ref shape, contacts);
+                if (simplexBounds.min[node.axis] <= node.min + shape.center[node.axis])
+                    BIHTraverse(colliderIndex, simplexIndex, simplexStart, simplexSize,
+                                positions, orientations, radii, simplices, in simplexBounds,
+                                node.firstChild, contacts, optimizationIterations, optimizationTolerance);
 
                 // visit max node:
-                if (particleBounds.max[node.axis] + offset >= node.max)
-                    BIHTraverse(particleIndex, colliderIndex,
-                                particlePosition, particleOrientation, particleVelocity, particleRadii, ref particleBounds,
-                                node.firstChild + 1, ref bihNodes, ref edges, ref vertices, ref header,
-                                ref colliderToSolver, ref shape, contacts);
+                if (simplexBounds.max[node.axis] >= node.max + shape.center[node.axis])
+                    BIHTraverse(colliderIndex, simplexIndex, simplexStart, simplexSize,
+                                positions, orientations, radii, simplices, in simplexBounds,
+                                node.firstChild + 1, contacts, optimizationIterations, optimizationTolerance);
             }
             else
             {
-
-                // precalculate inverse of velocity vector for ray/aabb intersections:
-                float4 invDir = math.rcp(particleVelocity);
-
-                // contacts against all triangles:
-                for (int i = node.start; i < node.start + node.count; ++i)
+                // check for contact against all triangles:
+                for (dataOffset = node.start; dataOffset < node.start + node.count; ++dataOffset)
                 {
-                    Edge t = edges[header.firstEdge + i];
+                    Edge t = edges[header.firstEdge + dataOffset];
+                    float4 v1 = new float4(vertices[header.firstVertex + t.i1], 0) + shape.center;
+                    float4 v2 = new float4(vertices[header.firstVertex + t.i2], 0) + shape.center;
+                    BurstAabb edgeBounds = new BurstAabb(v1, v2, shape.contactOffset + 0.01f);
 
-                    float4 v1 = new float4(vertices[header.firstVertex + t.i1],0,0) * colliderToSolver.scale;
-                    float4 v2 = new float4(vertices[header.firstVertex + t.i2],0,0) * colliderToSolver.scale;
-
-                    BurstAabb aabb = new BurstAabb(v1, v2, 0.01f);
-                    aabb.Expand(new float4(offset));
-
-                    // only generate a contact if the particle trajectory intersects its inflated aabb:
-                    if (aabb.IntersectsRay(particlePosition, invDir, true))
+                    if (edgeBounds.IntersectsAabb(simplexBounds, shape.is2D != 0))
                     {
+                        var co = new BurstContact() { bodyA = simplexIndex, bodyB = colliderIndex };
+                        float4 simplexBary = BurstMath.BarycenterForSimplexOfSize(simplexSize);
 
-                        float4 point = BurstMath.NearestPointOnEdge(v1, v2, particlePosition);
-                        float4 pointToTri = particlePosition - point;
-                        float distance = math.length(pointToTri);
+                        var colliderPoint = BurstLocalOptimization.Optimize<BurstEdgeMesh>(ref this, positions, orientations, radii, simplices, simplexStart, simplexSize,
+                                                                            ref simplexBary, out float4 convexPoint, optimizationIterations, optimizationTolerance);
 
-                        if (distance > BurstMath.epsilon)
-                        {
-                            BurstContact c = new BurstContact()
-                            {
-                                entityA = particleIndex,
-                                entityB = colliderIndex,
-                                point = colliderToSolver.TransformPointUnscaled(point),
-                                normal = colliderToSolver.TransformDirection(pointToTri / distance),
-                            };
+                        co.pointB = colliderPoint.point;
+                        co.normal = colliderPoint.normal;
+                        co.pointA = simplexBary;
 
-                            c.distance = distance - (shape.contactOffset + BurstMath.EllipsoidRadius(c.normal, particleOrientation, particleRadii.xyz));
-
-                            contacts.Enqueue(c);
-                        }
+                        contacts.Enqueue(co);
                     }
                 }
             }

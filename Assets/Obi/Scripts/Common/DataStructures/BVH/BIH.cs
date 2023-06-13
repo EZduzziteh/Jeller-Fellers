@@ -43,37 +43,8 @@ namespace Obi
                     // place split plane at half the longest axis:
                     float pivot = b.min[axis] + size[axis] * 0.5f;
 
-                    // sort elements using the split plane (Hoare's partition algorithm):
-                    int i = start - 1;
-                    int j = end + 1;
-                    Aabb bi, bj;
-                    while (true)
-                    {
-                        // iterate over left elements, while they're smaller than the pivot.
-                        do
-                        {
-                            bi = elements[++i].GetBounds();
-                            if (bi.center[axis] < pivot)
-                                node.min = Mathf.Max(node.min, bi.max[axis]);
-                        } while (bi.center[axis] < pivot);
-
-                        // iterate over right elements, while they're larger than the pivot.
-                        do
-                        {
-                            bj = elements[--j].GetBounds();
-                            if (bj.center[axis] >= pivot)
-                                node.max = Mathf.Min(node.max, bj.min[axis]);
-                        } while (bj.center[axis] >= pivot);
-
-                        // if element i is larger than the pivot, j smaller than the pivot, swap them.
-                        if (i < j)
-                        {
-                            ObiUtils.Swap(ref elements[i], ref elements[j]);
-                            node.min = Mathf.Max(node.min, bj.max[axis]);
-                            node.max = Mathf.Min(node.max, bi.min[axis]);
-                        }
-                        else break;
-                    }
+                    // partition elements according to which side of the split plane they're at:
+                    int j = HoarePartition(elements, start, end, pivot, ref node, axis);
 
                     // create two child nodes:
                     var minChild = new BIHNode(start, j - start + 1);
@@ -108,6 +79,30 @@ namespace Obi
                 }
             }
             return nodes.ToArray();
+        }
+
+        public static int HoarePartition(IBounded[] elements, int start, int end, float pivot, ref BIHNode node, int axis)
+        {
+            int i = start;
+            int j = end;
+
+            while (i <= j)
+            {
+                while (i < end && elements[i].GetBounds().center[axis] < pivot)
+                    node.min = Mathf.Max(node.min, elements[i++].GetBounds().max[axis]);
+
+                while (j > start && elements[j].GetBounds().center[axis] > pivot)
+                    node.max = Mathf.Min(node.max, elements[j--].GetBounds().min[axis]);
+
+                if (i <= j)
+                {
+                    node.min = Mathf.Max(node.min, elements[j].GetBounds().max[axis]);
+                    node.max = Mathf.Min(node.max, elements[i].GetBounds().min[axis]);
+                    ObiUtils.Swap(ref elements[i++], ref elements[j--]);
+                }
+            }
+
+            return j;
         }
 
         public static float DistanceToSurface(Triangle[] triangles,

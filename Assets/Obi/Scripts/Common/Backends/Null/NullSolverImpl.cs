@@ -35,21 +35,19 @@ namespace Obi
             return 0;
         }
 
-        public void ParticleCountChanged(ObiSolver solver)
+        public void SetSimplices(ObiNativeIntList simplices, SimplexCounts counts)
         {
         }
 
-
-        public void ParticleCapacityChanged(ObiSolver solver)
+        public void ParticleCountChanged(ObiSolver solver)
         {
-
         }
 
         public void SetRigidbodyArrays(ObiSolver solver)
         {
         }
 
-        public void SetActiveParticles(int[] indices, int num)
+        public void SetActiveParticles(ObiNativeIntList indices)
         {
         }
 
@@ -96,7 +94,7 @@ namespace Obi
             return null;
         }
 
-        public IObiJobHandle Substep(float substepTime)
+        public IObiJobHandle Substep(float stepTime, float substepTime, int index)
         {
             return null;
         }
@@ -113,9 +111,18 @@ namespace Obi
         {
             return 0;
         }
+
         public void GetParticleGrid(ObiNativeAabbList cells)
         {
         }
 
+        public void SpatialQuery(ObiNativeQueryShapeList shapes, ObiNativeAffineTransformList transforms, ObiNativeQueryResultList results)
+        {
+        }
+
+        public void ReleaseJobHandles()
+        {
+
+        }
     }
 }
